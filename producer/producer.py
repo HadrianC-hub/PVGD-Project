@@ -156,3 +156,24 @@ def upload_batch_to_hdfs(batch_df, batch_number):
         print("❌ Error procesando lote {}: {}".format(batch_number, e))
         return False
 
+def consolidate_data(batch_number):
+    """Consolidar datos antiguos periódicamente"""
+    try:
+        if batch_number % 20 == 0 and batch_number > 0:
+            print("🔄 Realizando consolidación periódica...")
+            
+            list_cmd = ["hdfs", "dfs", "-ls", "/data/input/retail_batch_*.csv"]
+            result = subprocess.run(list_cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                files = [line.split()[-1] for line in result.stdout.strip().split('\n') if line]
+                if len(files) > 10:
+                    files_to_move = files[:-10]
+                    for file_path in files_to_move:
+                        move_cmd = ["hdfs", "dfs", "-mv", file_path, "/data/processed/"]
+                        subprocess.run(move_cmd, capture_output=True)
+                    print("📦 {} archivos antiguos movidos a /data/processed/".format(len(files_to_move)))
+            
+    except Exception as e:
+        print("⚠️  Error en consolidación: {}".format(e))
+
