@@ -72,3 +72,55 @@ def load_and_analyze_dataset():
     else:
         print("❌ Error: No se encuentra el dataset en /dataset/data.csv")
         sys.exit(1)
+
+def generate_batch_data(base_df, batch_size=100, batch_number=0):
+    """Generar un lote de datos nuevo basado en el dataset real"""
+    # Tomar una muestra aleatoria del dataset base
+    sample_size = min(batch_size, len(base_df))
+    sample = base_df.sample(n=sample_size, replace=False).copy()
+    
+    # Modificar la fecha para que sea actual
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    sample['Date'] = current_date
+    
+    # Modificar valores numéricos para simular nuevos datos
+    numeric_columns = ['Inventory_Level', 'Units_Sold', 'Units_Ordered', 'Demand_Forecast', 'Price', 'Discount', 'Competitor_Pricing']
+    
+    for col in numeric_columns:
+        if col in sample.columns:
+            # Añadir variación aleatoria (±15%)
+            variation = random.uniform(0.85, 1.15)
+            if col in ['Inventory_Level', 'Units_Sold', 'Units_Ordered']:
+                # Para valores enteros, redondear y asegurar positivos
+                sample[col] = (sample[col] * variation).round().astype(int).clip(lower=0)
+            else:
+                # Para valores decimales, mantener decimales y asegurar positivos
+                sample[col] = (sample[col] * variation).round(2).clip(lower=0)
+    
+    # Modificar categorías/texto ocasionalmente para variedad
+    text_columns = ['Store_ID', 'Product_ID', 'Category', 'Region', 'Weather_Condition', 'Seasonality']
+    
+    for col in text_columns:
+        if col in sample.columns and random.random() > 0.7:  # 30% de probabilidad
+            if col == 'Store_ID':
+                sample[col] = 'S' + sample[col].str[1:].apply(lambda x: "{:03d}".format(int(x)))
+            elif col == 'Product_ID':
+                sample[col] = 'P' + sample[col].str[1:].apply(lambda x: "{:04d}".format(int(x)))
+            elif col == 'Category':
+                categories = ['Groceries', 'Toys', 'Electronics', 'Furniture', 'Clothing', 'Sports', 'Books', 'Home_Appliances']
+                sample[col] = random.choices(categories, k=len(sample))
+            elif col == 'Region':
+                regions = ['North', 'South', 'East', 'West', 'Central', 'Northeast', 'Southwest']
+                sample[col] = random.choices(regions, k=len(sample))
+            elif col == 'Weather_Condition':
+                weathers = ['Sunny', 'Cloudy', 'Rainy', 'Snowy', 'Windy', 'Foggy', 'Stormy']
+                sample[col] = random.choices(weathers, k=len(sample))
+            elif col == 'Seasonality':
+                seasons = ['Spring', 'Summer', 'Autumn', 'Winter']
+                sample[col] = random.choices(seasons, k=len(sample))
+    
+    # Modificar Holiday_Promotion aleatoriamente
+    if 'Holiday_Promotion' in sample.columns:
+        sample['Holiday_Promotion'] = [random.choice([0, 1]) for _ in range(len(sample))]
+    
+    return sample
