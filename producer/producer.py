@@ -177,3 +177,61 @@ def consolidate_data(batch_number):
     except Exception as e:
         print("⚠️  Error en consolidación: {}".format(e))
 
+def main():
+    print("🚀 Iniciando Retail Data Producer Continuo...")
+    print("📊 Dataset: Ventas minoristas (Retail)")
+    print("⏰ Modo: Producción por lotes cada 30 segundos")
+    print("🔧 Característica: Datos limpios y normalizados")
+    
+    if not check_hdfs_ready():
+        print("❌ HDFS no disponible después de 150 segundos")
+        sys.exit(1)
+    
+    setup_hdfs_directories()
+    
+    base_df = load_and_analyze_dataset()
+    
+    batch_number = 0
+    
+    print("\n🎯 Iniciando producción de datos de retail...")
+    print("   • Lote cada: 30 segundos")
+    print("   • Tamaño de lote: 50-150 registros")
+    print("   • Consolidación cada: 20 lotes\n")
+    
+    try:
+        while True:
+            batch_size = random.randint(50, 150)
+            
+            print("\n📦 Generando lote {}...".format(batch_number))
+            print("   • Tamaño: {} registros".format(batch_size))
+            print("   • Timestamp: {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            
+            batch_df = generate_batch_data(base_df, batch_size, batch_number)
+            
+            if 'Category' in batch_df.columns:
+                category_counts = batch_df['Category'].value_counts()
+                print("   • Distribución por categoría: {}".format(dict(category_counts)))
+            
+            if 'Units_Sold' in batch_df.columns:
+                total_sold = batch_df['Units_Sold'].sum()
+                print("   • Total unidades vendidas: {}".format(total_sold))
+            
+            success = upload_batch_to_hdfs(batch_df, batch_number)
+            
+            if success:
+                consolidate_data(batch_number)
+                
+                total_records_approx = (batch_number + 1) * batch_size
+                print("   • Total acumulado aproximado: ~{} registros".format(total_records_approx))
+                print("   • Próximo lote en: 30 segundos")
+            
+            batch_number += 1
+            time.sleep(30)
+            
+    except KeyboardInterrupt:
+        print("\n\n🛑 Producer detenido por el usuario")
+        print("📈 Resumen: {} lotes procesados".format(batch_number))
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
