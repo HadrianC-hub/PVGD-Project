@@ -124,3 +124,35 @@ def generate_batch_data(base_df, batch_size=100, batch_number=0):
         sample['Holiday_Promotion'] = [random.choice([0, 1]) for _ in range(len(sample))]
     
     return sample
+
+def upload_batch_to_hdfs(batch_df, batch_number):
+    """Subir un lote de datos a HDFS como archivo separado"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = "retail_batch_{}_{}.csv".format(batch_number, timestamp)
+    local_batch_path = "/dataset/{}".format(filename)
+    hdfs_batch_path = "/data/input/{}".format(filename)
+    
+    try:
+        # Asegurar que las columnas tengan nombres limpios
+        batch_df.columns = [col.replace(' ', '_').replace('/', '_').replace('-', '_') for col in batch_df.columns]
+        
+        # Guardar lote localmente
+        batch_df.to_csv(local_batch_path, index=False)
+        
+        # Subir a HDFS
+        put_cmd = ["hdfs", "dfs", "-put", "-f", local_batch_path, hdfs_batch_path]
+        result = subprocess.run(put_cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ Lote {} subido a HDFS: {} ({} registros)".format(batch_number, hdfs_batch_path, len(batch_df)))
+            # Eliminar archivo local temporal
+            os.remove(local_batch_path)
+            return True
+        else:
+            print("❌ Error subiendo lote {}: {}".format(batch_number, result.stderr))
+            return False
+            
+    except Exception as e:
+        print("❌ Error procesando lote {}: {}".format(batch_number, e))
+        return False
+
