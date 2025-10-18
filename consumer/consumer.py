@@ -41,3 +41,35 @@ def find_spark_submit():
     
     log_message("ERROR: No se pudo encontrar spark-submit")
     return None
+
+def run_spark_processing():
+    spark_submit_path = find_spark_submit()
+    if not spark_submit_path:
+        return False
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        if result.stdout:
+            for line in result.stdout.split('\n'):
+                if line.strip():
+                    log_message("SPARK: {}".format(line))
+        
+        if result.stderr:
+            for line in result.stderr.split('\n'):
+                if line.strip() and "WARN" not in line and "INFO" not in line:
+                    log_message("SPARK-ERR: {}".format(line))
+        
+        if result.returncode == 0:
+            log_message("Spark processing completado exitosamente")
+            return True
+        else:
+            log_message("Spark processing falló (código: {})".format(result.returncode))
+            return False
+            
+    except subprocess.TimeoutExpired:
+        log_message("Spark processing timeout")
+        return False
+    except Exception as e:
+        log_message("Error ejecutando Spark: {}".format(str(e)))
+        return False
