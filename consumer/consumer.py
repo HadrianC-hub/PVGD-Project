@@ -268,3 +268,45 @@ finally:
     except Exception as e:
         log_message("Error ejecutando Spark: {}".format(str(e)))
         return False
+
+def main():
+    log_message("INICIANDO SPARK CONSUMER (HIVe + POSTGRESQL)")
+    
+    spark_submit_path = find_spark_submit()
+    if not spark_submit_path:
+        log_message("ERROR CRÍTICO: No se puede encontrar spark-submit")
+        return
+    
+    # Limpiar warehouse local al inicio
+    log_message("Limpiando warehouse local...")
+    subprocess.run(["rm", "-rf", "/consumer/spark-warehouse"], capture_output=True)
+    
+    log_message("Esperando inicialización de servicios (30s)...")
+    time.sleep(30)
+    
+    processing_count = 0
+    
+    while True:
+        try:
+            log_message("--- Ciclo de procesamiento #{} ---".format(processing_count))
+            
+            success = run_spark_processing()
+            if success:
+                log_message("Procesamiento Spark exitoso - Datos en Hive y PostgreSQL")
+            else:
+                log_message("No hay datos nuevos o error en Spark")
+            
+            processing_count += 1
+            log_message("Ciclo completado. Esperando 60 segundos...")
+            time.sleep(60)
+            
+        except KeyboardInterrupt:
+            log_message("Spark Consumer detenido por usuario")
+            break
+        except Exception as e:
+            log_message("Error inesperado: {}".format(str(e)))
+            log_message("Traceback: {}".format(traceback.format_exc()))
+            time.sleep(60)
+
+if __name__ == "__main__":
+    main()
