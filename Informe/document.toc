@@ -1,0 +1,11 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {section}{Resumen}{2}{section*.2}%
+\contentsline {section}{\numberline {1}Dataset seleccionado}{2}{section.1}%
+\contentsline {section}{\numberline {2}Volumen}{2}{section.2}%
+\contentsline {section}{\numberline {3}Muestra del esquema (columnas)}{3}{section.3}%
+\contentsline {section}{\numberline {4}Características}{3}{section.4}%
+\contentsline {section}{\numberline {5}Pertinencia con el objetivo}{4}{section.5}%
+\contentsline {section}{\numberline {6}Arquitectura propuesta: \textbf {Batch}}{4}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Descripción general}{4}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Ventajas del enfoque batch}{4}{subsection.6.2}%
+\contentsline {section}{\numberline {7}Diagrama del sistema y descripción de componentes}{5}{section.7}%
