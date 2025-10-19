@@ -105,3 +105,18 @@ def calculate_logistics_costs(df):
     )
     
     return df
+
+def calculate_efficiency_metrics(df):
+    """Calcula métricas de eficiencia"""
+    # Eficiencia de inventario
+    df['inventory_turnover'] = df['units_sold'] / df['inventory_level'].replace(0, 1)
+    
+    # Eficiencia de precio vs competencia
+    df['pricing_efficiency'] = (
+        (df['price'] - df['competitor_pricing']) / df['competitor_pricing'].replace(0, 1) * 100
+    )
+    
+    # Eficiencia de promociones
+    df['promotion_efficiency'] = df['units_sold'] * df['holiday_promotion']
+    
+    return df
