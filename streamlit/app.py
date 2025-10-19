@@ -43,3 +43,35 @@ def execute_query(query, params=None):
             conn.close()
             return pd.DataFrame()
     return pd.DataFrame()
+
+def load_data():
+    """Carga datos principales con cache"""
+    query = """
+    SELECT 
+        date,
+        store_id,
+        product_id,
+        category,
+        region,
+        inventory_level,
+        units_sold,
+        units_ordered,
+        demand_forecast,
+        price,
+        discount,
+        weather_condition,
+        holiday_promotion,
+        competitor_pricing,
+        seasonality,
+        (units_sold * price) as revenue,
+        (units_sold * price * discount) as discount_amount,
+        -- Cálculo de precisión de demanda CORREGIDO para PostgreSQL
+        CASE 
+            WHEN demand_forecast > 0 THEN 
+                CAST((1 - ABS(units_sold - demand_forecast) / demand_forecast) * 100 AS DECIMAL(10,2))
+            ELSE 0 
+        END as forecast_accuracy
+    FROM retail_sales 
+    ORDER BY date DESC
+    """
+    return execute_query(query)
