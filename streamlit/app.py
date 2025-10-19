@@ -75,3 +75,33 @@ def load_data():
     ORDER BY date DESC
     """
     return execute_query(query)
+
+def calculate_logistics_costs(df):
+    """
+    Simula costos logísticos basados en:
+    - Distancia por región (costo fijo)
+    - Volumen de inventario (costo variable)
+    - Tipo de producto (costo categoría)
+    """
+    # Costos base por región (simulados)
+    region_costs = {
+        'North': 1.2, 'South': 1.0, 'East': 1.3, 
+        'West': 1.4, 'Central': 1.1, 'Northeast': 1.5, 'Southwest': 1.2
+    }
+    
+    # Costos por categoría (simulados)
+    category_costs = {
+        'Electronics': 1.8, 'Groceries': 1.0, 'Clothing': 1.2,
+        'Furniture': 2.0, 'Toys': 1.3, 'Sports': 1.4, 'Books': 1.1
+    }
+    
+    # Calcular costos logísticos simulados
+    df['base_logistics_cost'] = df['region'].map(region_costs).fillna(1.2)
+    df['category_cost_multiplier'] = df['category'].map(category_costs).fillna(1.2)
+    df['logistics_cost'] = (
+        df['base_logistics_cost'] * 
+        df['category_cost_multiplier'] * 
+        df['inventory_level'] * 0.1  # Costo por unidad de inventario
+    )
+    
+    return df
