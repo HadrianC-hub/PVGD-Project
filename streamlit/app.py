@@ -29,3 +29,17 @@ def get_postgres_connection():
     except Exception as e:
         st.error(f"❌ Error conectando a PostgreSQL: {e}")
         return None
+
+def execute_query(query, params=None):
+    """Ejecuta consulta y retorna DataFrame"""
+    conn = get_postgres_connection()
+    if conn:
+        try:
+            df = pd.read_sql_query(query, conn, params=params)
+            conn.close()
+            return df
+        except Exception as e:
+            st.error(f"❌ Error en consulta: {e}")
+            conn.close()
+            return pd.DataFrame()
+    return pd.DataFrame()
