@@ -1,237 +1,333 @@
-#!/usr/bin/env python3
 import pandas as pd
 import subprocess
 import time
 import os
+import re
 import sys
-import random
-from datetime import datetime, timedelta
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from datetime import datetime
+import pickle
+from collections import defaultdict, deque
+
+# CONFIGURACIÓN
+BATCH_SIZE = 5000        # Tamaño del batch
+SLEEP_TIME = 0.5         # Tiempo entre lotes
+
+# CARGA DATASET BASE
+BASE_DATASET_PATH = "/dataset/data.csv"
+BASE_DF = pd.read_csv(BASE_DATASET_PATH)
+
+BASE_DF.columns = [c.strip() for c in BASE_DF.columns]
+
+# Ruta para guardar el estado del forecast (persistente entre reinicios)
+FORECAST_STATE_PATH = "/producer/forecast_state.pkl"
+# Cuántas observaciones por (store,product) mantenemos
+HISTORY_WINDOW = 28  # días/batches guardados
+# Cada cuántos batches persistimos el estado en disco
+PERSIST_EVERY = 10
+
+def default_forecast_state():
+    return deque(maxlen=HISTORY_WINDOW)
+
+# Estructura: state[(store_id, product_id)] = deque([units_sold_history...], maxlen=HISTORY_WINDOW)
+if os.path.exists(FORECAST_STATE_PATH):
+    try:
+        with open(FORECAST_STATE_PATH, "rb") as f:
+            FORECAST_STATE = pickle.load(f)
+            # convertir listas en deques si vienen así
+            for k, v in list(FORECAST_STATE.items()):
+                if not isinstance(v, deque):
+                    FORECAST_STATE[k] = deque(v, maxlen=HISTORY_WINDOW)
+    except Exception as e:
+        print("WARN: no se pudo cargar forecast_state, inicializando vacío:", e)
+        FORECAST_STATE = defaultdict(default_forecast_state)
+else:
+    FORECAST_STATE = defaultdict(default_forecast_state)
+
+def persist_forecast_state():
+    try:
+        tmp_path = FORECAST_STATE_PATH + ".tmp"
+        with open(tmp_path, "wb") as f:
+            pickle.dump(FORECAST_STATE, f)
+        os.replace(tmp_path, FORECAST_STATE_PATH)
+    except Exception as e:
+        print("WARN: fallo al persistir forecast state:", e)
 
 def check_hdfs_ready():
     """Verificar si HDFS está listo"""
-    max_attempts = 30
-    for i in range(max_attempts):
+    for i in range(30):
         try:
-            result = subprocess.run(
-                ["nc", "-z", "hadoop-namenode", "8020"],
-                capture_output=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                print("HDFS esta listo")
-                return True
+            subprocess.check_output(["hdfs", "dfs", "-test", "-e", "/"], stderr=subprocess.STDOUT)
+            print("HDFS está listo y respondiendo")
+            return True
         except:
             pass
-        print("Esperando HDFS... ({}/{})".format(i+1, max_attempts))
+        print(f"Esperando HDFS... ({i+1}/{30})")
         time.sleep(5)
     return False
 
 def setup_hdfs_directories():
     """Crear directorios necesarios en HDFS"""
-    try:
-        subprocess.run(["hdfs", "dfs", "-mkdir", "-p", "/data/input"], capture_output=True)
-        subprocess.run(["hdfs", "dfs", "-mkdir", "-p", "/data/processed"], capture_output=True)
-        subprocess.run(["hdfs", "dfs", "-chmod", "-R", "777", "/data"], capture_output=True)
-        print("Directorios HDFS creados exitosamente")
-    except Exception as e:
-        print("Error creando directorios HDFS: {}".format(e))
+    commands = [
+        ["hdfs", "dfs", "-mkdir", "-p", "/data/input"],
+        ["hdfs", "dfs", "-mkdir", "-p", "/data/processed"],
+        ["hdfs", "dfs", "-chmod", "-R", "777", "/data"]
+    ]
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, capture_output=True)
+        except:
+            pass
+    print("Directorios HDFS verificados")
 
-def load_and_analyze_dataset():
-    """Cargar y analizar el dataset real con limpieza inicial"""
-    dataset_path = '/dataset/data.csv'
-    if os.path.exists(dataset_path):
-        df = pd.read_csv(dataset_path)
-        
-        # Limpieza inicial del dataset base
-        print("🔧 Realizando limpieza inicial del dataset...")
-        
-        # Renombrar columnas problemáticas
-        df.columns = [col.replace(' ', '_').replace('/', '_').replace('-', '_') for col in df.columns]
-        
-        # Limpiar valores nulos
-        numeric_cols = ['Inventory_Level', 'Units_Sold', 'Units_Ordered', 'Demand_Forecast', 'Price', 'Discount', 'Competitor_Pricing']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = df[col].fillna(0)
-        
-        # Limpiar columnas de texto
-        text_cols = ['Store_ID', 'Product_ID', 'Category', 'Region', 'Weather_Condition', 'Seasonality']
-        for col in text_cols:
-            if col in df.columns:
-                df[col] = df[col].fillna('Unknown').str.strip()
-        
-        print("📊 Dataset real cargado y limpiado: {} registros".format(len(df)))
-        print("🔍 Estructura detectada:")
-        print("   - Columnas: {}".format(list(df.columns)))
-        print("   - Tipos de datos:")
-        for col in df.columns:
-            print("     * {}: {}".format(col, df[col].dtype))
-        print("   - Muestra de datos limpios:")
-        print(df.head(2))
-        return df
-    else:
-        print("❌ Error: No se encuentra el dataset en /dataset/data.csv")
-        sys.exit(1)
+def generate_fast_batch(batch_size, batch_number):
 
-def generate_batch_data(base_df, batch_size=100, batch_number=0):
-    """Generar un lote de datos nuevo basado en el dataset real"""
-    # Tomar una muestra aleatoria del dataset base
-    sample_size = min(batch_size, len(base_df))
-    sample = base_df.sample(n=sample_size, replace=False).copy()
-    
-    # Modificar la fecha para que sea actual
     current_date = datetime.now().strftime("%Y-%m-%d")
-    sample['Date'] = current_date
-    
-    # Modificar valores numéricos para simular nuevos datos
-    numeric_columns = ['Inventory_Level', 'Units_Sold', 'Units_Ordered', 'Demand_Forecast', 'Price', 'Discount', 'Competitor_Pricing']
-    
-    for col in numeric_columns:
-        if col in sample.columns:
-            # Añadir variación aleatoria (±15%)
-            variation = random.uniform(0.85, 1.15)
-            if col in ['Inventory_Level', 'Units_Sold', 'Units_Ordered']:
-                # Para valores enteros, redondear y asegurar positivos
-                sample[col] = (sample[col] * variation).round().astype(int).clip(lower=0)
-            else:
-                # Para valores decimales, mantener decimales y asegurar positivos
-                sample[col] = (sample[col] * variation).round(2).clip(lower=0)
-    
-    # Modificar categorías/texto ocasionalmente para variedad
-    text_columns = ['Store_ID', 'Product_ID', 'Category', 'Region', 'Weather_Condition', 'Seasonality']
-    
-    for col in text_columns:
-        if col in sample.columns and random.random() > 0.7:  # 30% de probabilidad
-            if col == 'Store_ID':
-                sample[col] = 'S' + sample[col].str[1:].apply(lambda x: "{:03d}".format(int(x)))
-            elif col == 'Product_ID':
-                sample[col] = 'P' + sample[col].str[1:].apply(lambda x: "{:04d}".format(int(x)))
-            elif col == 'Category':
-                categories = ['Groceries', 'Toys', 'Electronics', 'Furniture', 'Clothing', 'Sports', 'Books', 'Home_Appliances']
-                sample[col] = random.choices(categories, k=len(sample))
-            elif col == 'Region':
-                regions = ['North', 'South', 'East', 'West', 'Central', 'Northeast', 'Southwest']
-                sample[col] = random.choices(regions, k=len(sample))
-            elif col == 'Weather_Condition':
-                weathers = ['Sunny', 'Cloudy', 'Rainy', 'Snowy', 'Windy', 'Foggy', 'Stormy']
-                sample[col] = random.choices(weathers, k=len(sample))
-            elif col == 'Seasonality':
-                seasons = ['Spring', 'Summer', 'Autumn', 'Winter']
-                sample[col] = random.choices(seasons, k=len(sample))
-    
-    # Modificar Holiday_Promotion aleatoriamente
-    if 'Holiday_Promotion' in sample.columns:
-        sample['Holiday_Promotion'] = [random.choice([0, 1]) for _ in range(len(sample))]
-    
-    return sample
+
+    # GENERACIÓN DIMENSIONAL
+    batch = (
+        BASE_DF
+            .sample(n=batch_size, replace=True)
+            .copy()
+            .reset_index(drop=True)
+    )
+
+    # Introduciendo fecha actual
+    batch["Date"] = current_date
+
+    # Modificando valores con distribución normal
+    batch["Units Sold"] *= np.random.normal(1.0, 0.12, batch_size)
+    batch["Inventory Level"] *= np.random.normal(1.0, 0.15, batch_size)
+    batch["Demand Forecast"] = batch["Units Sold"] * np.random.normal(1.03, 0.10, batch_size)
+    batch["Price"] *= np.random.normal(1.0, 0.05, batch_size)
+    batch["Competitor Pricing"] = batch["Price"] * np.random.normal(1.0, 0.08, batch_size)
+
+    # Modificando valores con coeficiente de estación
+    season_factor = batch["Seasonality"].map({
+        "Summer": 1.35,
+        "Spring": 1.10,
+        "Autumn": 1.05,
+        "Winter": 0.85
+    }).fillna(1.0)
+
+    batch["Units Sold"] *= season_factor
+    batch["Demand Forecast"] *= season_factor
+
+    promo = np.where(batch["Holiday/Promotion"] == 1, 1.5, 1.0)
+    batch["Units Sold"] *= promo
+    batch["Units Sold"] *= (1 + batch["Discount"] * 0.02)
+
+    reorder_mask = batch["Inventory Level"] < batch["Units Sold"] * 1.2
+
+    batch.loc[reorder_mask, "Units Ordered"] = np.random.randint(30,200,reorder_mask.sum())
+
+    for col in ["Units Sold", "Inventory Level", "Units Ordered"]:
+        batch[col] = batch[col].round(0).astype(int)
+
+    batch["Demand Forecast"] = batch["Demand Forecast"].round(2)
+    batch["Price"] = batch["Price"].round(2)
+    batch["Competitor Pricing"] = batch["Competitor Pricing"].round(2)
+
+    batch.columns = (
+        batch.columns.str.lower()
+                      .str.replace(" ", "_")
+                      .str.replace("/", "_")
+    )
+
+    # FORECAST INCREMENTAL
+
+    # Parámetros EMA (35% de importancia a la observación actual y 65% al histórico suavizado)
+    alpha = 0.35
+
+    # Pesos de cada componente
+    w_ema = 0.60      # Tendencia (EMA)
+    w_mean = 0.30     # Media móvil
+    w_exog = 0.10     # Factores externos
+
+    # Vector donde se almacenan los forecasts
+    forecasts = np.zeros(len(batch), dtype=float)
+
+    # Procesa cada registro del batch
+    for i, row in batch.iterrows():
+
+        # Identifica la serie tienda-producto
+        key = (row["store_id"], row["product_id"])
+
+        # Última venta observada
+        last_sale = int(row["units_sold"])
+
+        # Obtiene el histórico de ventas
+        hist = FORECAST_STATE.get(key, deque(maxlen=HISTORY_WINDOW))
+
+        # EMA (suavizado exponencial)
+        if len(hist) >= 1:
+            ema_val = hist[0]
+            for v in list(hist)[1:]:
+                ema_val = alpha * v + (1 - alpha) * ema_val
+
+            # Añade el último valor
+            ema = alpha * last_sale + (1 - alpha) * ema_val
+        else:
+            ema = last_sale
+
+        # Media móvil (ventana 7)
+        if len(hist) >= 7:
+            mean_k = np.mean(list(hist)[-7:])
+        elif len(hist) > 0:
+            mean_k = np.mean(hist)
+        else:
+            mean_k = last_sale
+
+        # Ajuste por precio vs competencia
+        comp = max(1.0, row["competitor_pricing"])
+        price_rel = row["price"] / comp
+
+        # Función exponencial de penalización/beneficio
+        price_adj = np.exp(-0.08 * (price_rel - 1.0))
+
+        # Ajuste por promoción
+        promo_adj = 1.25 if row["holiday_promotion"] == 1 else 1.0
+
+        # Forecast combinado
+        raw_forecast = (
+            w_ema * ema +
+            w_mean * mean_k +
+            w_exog * (last_sale * price_adj * promo_adj)
+        )
+
+        # Ruido aleatorio (±3%)
+        raw_forecast *= np.random.normal(1.0, 0.03)
+
+        # Evita valores negativos y redondea
+        forecasts[i] = max(0.0, round(raw_forecast, 2))
+
+        # Actualiza histórico
+        if key not in FORECAST_STATE:
+            FORECAST_STATE[key] = deque(maxlen=HISTORY_WINDOW)
+
+        FORECAST_STATE[key].append(last_sale)
+
+    # Añade la columna al dataframe
+    batch["demand_forecast"] = forecasts
+
+    # Guardado periódico en disco
+    if batch_number % PERSIST_EVERY == 0:
+        try:
+            persist_forecast_state()
+        except Exception as e:
+            print("WARN: persist failed", e)
+
+    return batch
+
+def _normalize_column_name(col: str) -> str:
+    """Normaliza un nombre de columna a snake_case seguro para Parquet/Hive."""
+    if not isinstance(col, str):
+        col = str(col)
+    # Lowercase + strip
+    c = col.strip().lower()
+    # Reemplazar barras y espacios por guión bajo
+    c = c.replace("/", "_").replace(" ", "_").replace("-", "_")
+    # Eliminar puntos
+    c = c.replace(".", "")
+    # Eliminar caracteres no válidos (incluye los señalados por Spark)
+    c = re.sub(r'[;{}\(\)\n\t=]', '', c)
+    # Reemplazar cualquier secuencia de caracteres no alfanuméricos por underscore
+    c = re.sub(r'[^0-9a-z_]', '_', c)
+    # Colapsar underscores repetidos
+    c = re.sub(r'__+', '_', c)
+    # Quitar underscores al inicio/fin
+    c = c.strip('_')
+    # Si queda vacío, poner generic_col
+    if c == "":
+        c = "col"
+    return c
 
 def upload_batch_to_hdfs(batch_df, batch_number):
-    """Subir un lote de datos a HDFS como archivo separado"""
+    """Sube el batch a HDFS con normalización segura de columnas para Hive/Parquet."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = "retail_batch_{}_{}.csv".format(batch_number, timestamp)
-    local_batch_path = "/dataset/{}".format(filename)
-    hdfs_batch_path = "/data/input/{}".format(filename)
+    date_partition = datetime.now().strftime("%Y-%m-%d")
+    filename = f"retail_batch_{batch_number}_{timestamp}.parquet"
+    
+    local_path = f"/tmp/{filename}"
+    hdfs_dest = f"/data/input/date={date_partition}/{filename}"
     
     try:
-        # Asegurar que las columnas tengan nombres limpios
-        batch_df.columns = [col.replace(' ', '_').replace('/', '_').replace('-', '_') for col in batch_df.columns]
+        # Normalizar columnas para evitar problemas con Hive/Parquet
+        new_cols = [_normalize_column_name(c) for c in batch_df.columns]
+        batch_df.columns = new_cols
         
-        # Guardar lote localmente
-        batch_df.to_csv(local_batch_path, index=False)
+        # Convertir a tabla PyArrow y guardar localmente
+        table = pa.Table.from_pandas(batch_df, preserve_index=False)
+        pq.write_table(table, local_path, compression='snappy')
         
+        # Crear carpeta de partición si es el primer batch del día
+        if batch_number % 100 == 0:
+             subprocess.run(["hdfs", "dfs", "-mkdir", "-p", f"/data/input/date={date_partition}"], capture_output=True)
+
         # Subir a HDFS
-        put_cmd = ["hdfs", "dfs", "-put", "-f", local_batch_path, hdfs_batch_path]
-        result = subprocess.run(put_cmd, capture_output=True, text=True)
+        put_result = subprocess.run(
+            ["hdfs", "dfs", "-put", "-f", local_path, hdfs_dest],
+            capture_output=True, text=True
+        )
         
-        if result.returncode == 0:
-            print("✅ Lote {} subido a HDFS: {} ({} registros)".format(batch_number, hdfs_batch_path, len(batch_df)))
-            # Eliminar archivo local temporal
-            os.remove(local_batch_path)
+        # Limpiar local
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            
+        if put_result.returncode == 0:
             return True
         else:
-            print("❌ Error subiendo lote {}: {}".format(batch_number, result.stderr))
+            print(f"Error HDFS: {put_result.stderr}")
             return False
             
     except Exception as e:
-        print("❌ Error procesando lote {}: {}".format(batch_number, e))
+        print(f"Error crítico subiendo lote: {e}")
         return False
 
-def consolidate_data(batch_number):
-    """Consolidar datos antiguos periódicamente"""
-    try:
-        if batch_number % 20 == 0 and batch_number > 0:
-            print("🔄 Realizando consolidación periódica...")
-            
-            list_cmd = ["hdfs", "dfs", "-ls", "/data/input/retail_batch_*.csv"]
-            result = subprocess.run(list_cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                files = [line.split()[-1] for line in result.stdout.strip().split('\n') if line]
-                if len(files) > 10:
-                    files_to_move = files[:-10]
-                    for file_path in files_to_move:
-                        move_cmd = ["hdfs", "dfs", "-mv", file_path, "/data/processed/"]
-                        subprocess.run(move_cmd, capture_output=True)
-                    print("📦 {} archivos antiguos movidos a /data/processed/".format(len(files_to_move)))
-            
-    except Exception as e:
-        print("⚠️  Error en consolidación: {}".format(e))
-
 def main():
-    print("🚀 Iniciando Retail Data Producer Continuo...")
-    print("📊 Dataset: Ventas minoristas (Retail)")
-    print("⏰ Modo: Producción por lotes cada 30 segundos")
-    print("🔧 Característica: Datos limpios y normalizados")
+    print("INICIANDO HIGH-PERFORMANCE DATA PRODUCER")
+    print(f"Configuración: {BATCH_SIZE} registros cada {SLEEP_TIME}s")
+    print(f"Volumen estimado: {int(BATCH_SIZE * (1/SLEEP_TIME) * 60):,} registros/minuto")
     
+    # Comprobando que HDFS esté disponible
     if not check_hdfs_ready():
-        print("❌ HDFS no disponible después de 150 segundos")
         sys.exit(1)
-    
+        
+    # Creando directorios para datos en HDFS
     setup_hdfs_directories()
     
-    base_df = load_and_analyze_dataset()
-    
-    batch_number = 0
-    
-    print("\n🎯 Iniciando producción de datos de retail...")
-    print("   • Lote cada: 30 segundos")
-    print("   • Tamaño de lote: 50-150 registros")
-    print("   • Consolidación cada: 20 lotes\n")
+    batch_counter = 0
+    total_records = 0
     
     try:
         while True:
-            batch_size = random.randint(50, 150)
+            start_time = time.time()
             
-            print("\n📦 Generando lote {}...".format(batch_number))
-            print("   • Tamaño: {} registros".format(batch_size))
-            print("   • Timestamp: {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            # 1. Generar dataframe
+            df = generate_fast_batch(BATCH_SIZE, batch_counter)
+            gen_time = time.time() - start_time
             
-            batch_df = generate_batch_data(base_df, batch_size, batch_number)
-            
-            if 'Category' in batch_df.columns:
-                category_counts = batch_df['Category'].value_counts()
-                print("   • Distribución por categoría: {}".format(dict(category_counts)))
-            
-            if 'Units_Sold' in batch_df.columns:
-                total_sold = batch_df['Units_Sold'].sum()
-                print("   • Total unidades vendidas: {}".format(total_sold))
-            
-            success = upload_batch_to_hdfs(batch_df, batch_number)
+            # 2. Subir dataframe a HDFS
+            upload_start = time.time()
+            success = upload_batch_to_hdfs(df, batch_counter)
+            upload_time = time.time() - upload_start
             
             if success:
-                consolidate_data(batch_number)
+                total_records += len(df)
+                print(f"Lote {batch_counter} OK | Generación: {gen_time:.3f}s | Subida: {upload_time:.3f}s | Total: {total_records:,} regs")
+            
+            batch_counter += 1
+            
+            # Descanso dinámico (si el proceso fue muy rápido, dormimos lo configurado)
+            # Si el proceso fue lento, no dormimos para intentar recuperar tiempo
+            total_cycle_time = time.time() - start_time
+            if total_cycle_time < SLEEP_TIME:
+                time.sleep(SLEEP_TIME - total_cycle_time)
                 
-                total_records_approx = (batch_number + 1) * batch_size
-                print("   • Total acumulado aproximado: ~{} registros".format(total_records_approx))
-                print("   • Próximo lote en: 30 segundos")
-            
-            batch_number += 1
-            time.sleep(30)
-            
     except KeyboardInterrupt:
-        print("\n\n🛑 Producer detenido por el usuario")
-        print("📈 Resumen: {} lotes procesados".format(batch_number))
-        sys.exit(0)
+        print("\nProducción detenida.")
 
 if __name__ == "__main__":
     main()
