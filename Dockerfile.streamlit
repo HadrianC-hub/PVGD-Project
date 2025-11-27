@@ -1,0 +1,37 @@
+# Dockerfile.streamlit
+FROM python:3.9-slim-bullseye
+
+# 1. Instalar Java (Necesario para HDFS) y utilidades básicas
+RUN apt-get update && \
+    apt-get install -y openjdk-11-jdk-headless curl gnupg procps && \
+    rm -rf /var/lib/apt/lists/*
+
+# 2. Instalar Hadoop Cliente (Versión compatible con tu cluster 3.2.1)
+ENV HADOOP_VERSION=3.2.1
+RUN curl -sL https://archive.apache.org/dist/hadoop/common/hadoop-$HADOOP_VERSION/hadoop-$HADOOP_VERSION.tar.gz | \
+    tar -xz -C /opt/ && \
+    ln -s /opt/hadoop-$HADOOP_VERSION /opt/hadoop
+
+# 3. Configurar Variables de Entorno de Hadoop y Java
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+ENV HADOOP_HOME=/opt/hadoop
+ENV PATH=$PATH:$HADOOP_HOME/bin
+ENV ARROW_LIBHDFS_DIR=$HADOOP_HOME/lib/native
+
+# 4. Instalar librerías de Python
+# Pandas, Streamlit, PyArrow (para HDFS), Plotly
+RUN pip install --no-cache-dir \
+    streamlit \
+    pandas \
+    plotly \
+    pyarrow \
+    numpy
+
+# 5. Configuración de trabajo
+WORKDIR /streamlit
+
+# Script de entrada para configurar el CLASSPATH dinámicamente antes de arrancar
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

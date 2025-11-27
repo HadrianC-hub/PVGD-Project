@@ -17,8 +17,8 @@ services:
       - CORE_CONF_hadoop_proxyuser_root_hosts=*
       - CORE_CONF_hadoop_proxyuser_root_groups=*
     ports:
-      - "9870:9870"
-      - "8020:8020"
+      - "9870:9870" # HDFS Web UI
+      - "8020:8020" # HDFS RPC Port
     volumes:
       - namenode_data:/hadoop/dfs/name
       - ./config:/opt/hadoop/etc/hadoop
@@ -26,37 +26,53 @@ services:
       hadoop_net:
         ipv4_address: 172.20.0.10
 
-  hadoop-datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
-    container_name: hadoop-datanode
-    hostname: hadoop-datanode
-    environment:
-      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
-    depends_on:
-      - hadoop-namenode
-    volumes:
-      - datanode_data:/hadoop/dfs/data
-      - ./config:/opt/hadoop/etc/hadoop
-    networks:
-      hadoop_net:
-        ipv4_address: 172.20.0.11
-
   hadoop-resourcemanager:
     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
     container_name: hadoop-resourcemanager
     hostname: hadoop-resourcemanager
     environment:
-      - CORE_CONf_fs_defaultFS=hdfs://hadoop-namenode:8020
+      - CLUSTER_NAME=hadoop-cluster
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
       - YARN_CONF_yarn_resourcemanager_hostname=hadoop-resourcemanager
+    ports:
+      - "8088:8088" # YARN Web UI
+    volumes:
+      - ./config:/opt/hadoop/etc/hadoop
     depends_on:
       - hadoop-namenode
-    ports:
-      - "8088:8088"
+    networks:
+      hadoop_net:
+        ipv4_address: 172.20.0.11
+
+  hadoop-datanode-1:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: hadoop-datanode-1
+    hostname: hadoop-datanode-1
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
+    depends_on:
+      - hadoop-namenode
     volumes:
+      - datanode_data_1:/hadoop/dfs/data
       - ./config:/opt/hadoop/etc/hadoop
     networks:
       hadoop_net:
         ipv4_address: 172.20.0.12
+
+  hadoop-datanode-2:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: hadoop-datanode-2
+    hostname: hadoop-datanode-2
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
+    depends_on:
+      - hadoop-namenode
+    volumes:
+      - datanode_data_2:/hadoop/dfs/data
+      - ./config:/opt/hadoop/etc/hadoop
+    networks:
+      hadoop_net:
+        ipv4_address: 172.20.0.13
 
   hadoop-nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
@@ -67,147 +83,107 @@ services:
       - YARN_CONF_yarn_resourcemanager_hostname=hadoop-resourcemanager
     depends_on:
       - hadoop-resourcemanager
+      - hadoop-datanode-1 
+      - hadoop-datanode-2 # Dependemos de ambos datanodes
     volumes:
       - ./config:/opt/hadoop/etc/hadoop
     networks:
       hadoop_net:
-        ipv4_address: 172.20.0.13
-
-  postgres:
-    image: postgres:13
-    container_name: postgres
-    environment:
-      - POSTGRES_USER=hive
-      - POSTGRES_PASSWORD=hive
-      - POSTGRES_DB=hive
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      hadoop_net:
         ipv4_address: 172.20.0.14
-
-  # Hive Metastore - CON VARIABLES CORREGIDAS
-  hive-metastore:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    container_name: hive-metastore
-    hostname: hive-metastore
-    environment:
-      - DB_POSTGRES_USER=hive
-      - DB_POSTGRES_PASSWORD=hive
-      - DB_POSTGRES_DB=hive
-      - DB_POSTGRES_HOST=postgres
-      - DB_POSTGRES_PORT=5432
-      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
-      - HDFS_CONF_dfs_namenode_rpc-address=hadoop-namenode:8020
-      - CORE_CONF_hadoop_proxyuser_root_hosts=*
-      - CORE_CONF_hadoop_proxyuser_root_groups=*
-    depends_on:
-      - postgres
-    ports:
-      - "9083:9083"
-    volumes:
-      - ./config/hive-site.xml:/opt/hive/conf/hive-site.xml
-      - ./config/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
-      - ./config/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml
-    networks:
-      hadoop_net:
-        ipv4_address: 172.20.0.15
-    command: /opt/hive/bin/hive --service metastore
-
-  # Hive Server - CON VARIABLES CORREGIDAS  
-  hive-server:
-    image: bde2020/hive:2.3.2
-    container_name: hive-server
-    hostname: hive-server
-    environment:
-      - HIVE_METASTORE_URI=thrift://hive-metastore:9083
-      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
-      - HDFS_CONF_dfs_namenode_rpc-address=hadoop-namenode:8020
-      - CORE_CONF_hadoop_proxyuser_root_hosts=*
-      - CORE_CONF_hadoop_proxyuser_root_groups=*
-    depends_on:
-      - hive-metastore
-    ports:
-      - "10000:10000"
-      - "10002:10002"
-    volumes:
-      - ./config/hive-site.xml:/opt/hive/conf/hive-site.xml
-      - ./config/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
-      - ./config/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml
-    networks:
-      hadoop_net:
-        ipv4_address: 172.20.0.16
-    command: /opt/hive/bin/hiveserver2
 
   spark-master:
     image: bde2020/spark-master:3.0.0-hadoop3.2
     container_name: spark-master
     hostname: spark-master
     environment:
+      - INIT_DAEMON_STEP=setup_spark
       - SPARK_MASTER_HOST=spark-master
-      - SPARK_MODE=master
     ports:
-      - "7077:7077"
-      - "8080:8080"
+      - "8080:8080" # Spark Web UI
+      - "7077:7077" # Spark RPC Port
+    volumes:
+      - ./config/log4j.properties:/opt/spark/conf/log4j.properties
+    depends_on:
+      - hadoop-namenode
+    networks:
+      hadoop_net:
+        ipv4_address: 172.20.0.15
+
+  spark-worker-1:
+    image: bde2020/spark-worker:3.0.0-hadoop3.2
+    container_name: spark-worker-1
+    hostname: spark-worker-1
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - ENABLE_INIT_DAEMON=false
+      - SPARK_EXECUTOR_MEMORY=2G
+    depends_on:
+      - spark-master
+    volumes:
+      - ./config/log4j.properties:/opt/spark/conf/log4j.properties
+    networks:
+      hadoop_net:
+        ipv4_address: 172.20.0.16
+
+  spark-worker-2:
+    image: bde2020/spark-worker:3.0.0-hadoop3.2
+    container_name: spark-worker-2
+    hostname: spark-worker-2
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - ENABLE_INIT_DAEMON=false
+      - SPARK_EXECUTOR_MEMORY=2G
+    depends_on:
+      - spark-master
+    volumes:
+      - ./config/log4j.properties:/opt/spark/conf/log4j.properties
     networks:
       hadoop_net:
         ipv4_address: 172.20.0.17
 
-  spark-worker:
-    image: bde2020/spark-worker:3.0.0-hadoop3.2
-    container_name: spark-worker
-    hostname: spark-worker
+  hive-metastore:
+    image: apache/hive:3.1.3
+    container_name: hive-metastore
+    hostname: hive-metastore
+    user: root
     environment:
-      - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_MODE=worker
-      - SPARK_WORKER_MEMORY=1G
-      - SPARK_WORKER_CORES=2
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
+      - HDFS_CONF_dfs_namenode_rpc-address=hadoop-namenode:8020
     depends_on:
-      - spark-master
+      - hadoop-namenode
+    ports:
+      - "9083:9083" # Hive Metastore Thrift Port
     volumes:
-      - ./consumer:/consumer  # Agregar volumen para el consumer
+      - ./config/hive-site.xml:/opt/hive/conf/hive-site.xml
+      - ./config/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
+      - ./config/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml
     networks:
       hadoop_net:
-        ipv4_address: 172.20.0.18
+        ipv4_address: 172.20.0.20
+    entrypoint: >
+      bash -c "chown -R hive:hive /opt/hive /opt/hive/metastore_db 2>/dev/null || true; if [ -f /opt/hive/metastore_db/service.properties ]; then echo 'Metastore ya inicializado (service.properties encontrado)'; else if [ -d /opt/hive/metastore_db ] && [ -z \"$$(ls -A /opt/hive/metastore_db 2>/dev/null)\" ]; then echo 'Directorio metastore vacío: eliminando para permitir creación'; rm -rf /opt/hive/metastore_db; fi; echo 'Inicializando metastore Derby...'; /opt/hive/bin/schematool -dbType derby -initSchema || true; fi; echo 'Arrancando Hive Metastore con logging DEBUG'; exec /opt/hive/bin/hive --service metastore -hiveconf hive.root.logger=DEBUG,console"
 
-  # Data Producer - Usar imagen personalizada
   data-producer:
-    image: data-producer-image
+    build:
+      context: .
+      dockerfile: Dockerfile.data-producer
     container_name: data-producer
     hostname: data-producer
     environment:
       - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
       - HDFS_NAMENODE=hadoop-namenode:8020
       - HDFS_PATH=/data/input/
-      - BATCH_INTERVAL=30
+      - BATCH_INTERVAL=1
     depends_on:
       - hadoop-namenode
     volumes:
       - ./dataset:/dataset
       - ./producer:/producer
-      - ./config:/opt/hadoop/etc/hadoop  # Importante para tener Hadoop config
+      - ./config:/opt/hadoop/etc/hadoop
     networks:
       hadoop_net:
-        ipv4_address: 172.20.0.19
+        ipv4_address: 172.20.0.18
     command: python3.7 /producer/producer.py
-
-  # Streamlit App - Nuevo contenedor
-  streamlit-app:
-    image: streamlit-postgres
-    container_name: streamlit-app
-    hostname: streamlit-app
-    environment:
-      - HIVE_SERVER=hive-server:10000
-    depends_on:
-      - hive-server
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./streamlit:/streamlit
-    networks:
-      hadoop_net:
-        ipv4_address: 172.20.0.20
-    command: ["streamlit", "run", "/streamlit/app.py", "--server.address=0.0.0.0"]
 
   spark-consumer:
     image: bde2020/spark-worker:3.0.0-hadoop3.2
@@ -216,27 +192,51 @@ services:
     environment:
       - SPARK_MASTER=spark://spark-master:7077
       - ENABLE_INIT_DAEMON=false
+      - SPARK_EXECUTOR_MEMORY=2G
+      - SPARK_DRIVER_MEMORY=2G
     depends_on:
       - spark-master
       - hadoop-namenode
-      - postgres
     volumes:
       - ./consumer:/consumer
       - ./config/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
       - ./config/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml
-      - ./jars/postgresql-42.5.0.jar:/opt/spark/jars/postgresql-42.5.0.jar
     networks:
       hadoop_net:
-        ipv4_address: 172.20.0.21
+        ipv4_address: 172.20.0.19
     command: >
       sh -c "
-        echo '=== INICIANDO SPARK CONSUMER CON POSTGRESQL ===' &&
+        echo '=== INICIANDO SPARK CONSUMER SOLO PARQUET ===' &&
         cd /consumer &&
         python3 consumer.py
       "
 
+  streamlit-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: streamlit-app
+    hostname: streamlit-app
+    depends_on:
+      - spark-master
+      - hadoop-namenode
+    ports:
+      - "8501:8501"
+    environment:
+      - HADOOP_USER_NAME=root
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
+      - HDFS_NAMENODE_RPC_ADDRESS=hadoop-namenode:8020
+    volumes:
+      - ./streamlit:/streamlit
+      - ./config/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
+      - ./config/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml
+    networks:
+      hadoop_net:
+        ipv4_address: 172.20.0.21
+    command: ["streamlit", "run", "/streamlit/app.py", "--server.address=0.0.0.0"]
+
 
 volumes:
   namenode_data:
-  datanode_data:
-  postgres_data:
+  datanode_data_1:
+  datanode_data_2:
