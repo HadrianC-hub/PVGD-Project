@@ -1,312 +1,149 @@
-#!/usr/bin/env python3
-import time
-import os
 import subprocess
-import sys
-import traceback
-
-# --- Configuración ---
-POSTGRES_JDBC_URL = "jdbc:postgresql://postgres:5432/hive"
-POSTGRES_USER = "hive"
-POSTGRES_PASSWORD = "hive"
-POSTGRES_TABLE = "retail_sales"
-
-def log_message(message):
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    print("[SPARK-CONSUMER] [{}] {}".format(timestamp, message))
-    sys.stdout.flush()
-
-def find_spark_submit():
-    possible_paths = [
-        "/opt/spark/bin/spark-submit",
-        "/usr/spark/bin/spark-submit", 
-        "/usr/local/spark/bin/spark-submit",
-        "/opt/bitnami/spark/bin/spark-submit",
-        "/spark/bin/spark-submit"
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            log_message("spark-submit encontrado en: {}".format(path))
-            return path
-    
-    try:
-        result = subprocess.run(["which", "spark-submit"], capture_output=True, text=True)
-        if result.returncode == 0:
-            path = result.stdout.strip()
-            log_message("spark-submit encontrado via which: {}".format(path))
-            return path
-    except:
-        pass
-    
-    log_message("ERROR: No se pudo encontrar spark-submit")
-    return None
-
-def run_spark_processing():
-    spark_submit_path = find_spark_submit()
-    if not spark_submit_path:
-        return False
-
-    spark_script_content = '''# -*- coding: utf-8 -*-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
-
-print("=== INICIANDO PROCESAMIENTO SPARK CON HIVE Y POSTGRESQL ===")
-
-try:
-    # CONFIGURACIÓN CORREGIDA CON HIVE
-    spark = SparkSession.builder \\
-        .appName("RetailDataProcessor") \\
-        .config("spark.hadoop.fs.defaultFS", "hdfs://hadoop-namenode:8020") \\
-        .config("spark.jars", "/opt/spark/jars/postgresql-42.5.0.jar") \\
-        .config("hive.metastore.uris", "thrift://hive-metastore:9083") \\
-        .config("spark.sql.warehouse.dir", "hdfs://hadoop-namenode:8020/user/hive/warehouse") \\
-        .config("spark.hadoop.hive.metastore.warehouse.dir", "hdfs://hadoop-namenode:8020/user/hive/warehouse") \\
-        .enableHiveSupport() \\
-        .getOrCreate()
-    
-    spark.sparkContext.setLogLevel("WARN")
-    print("SPARK: Sesión Spark creada con soporte Hive")
-
-    # Rutas
-    hdfs_input_path = "hdfs://hadoop-namenode:8020/data/input/retail_batch_*.csv"
-    print("SPARK: Buscando datos en: " + hdfs_input_path)
-
-    # Leer datos
-    df = spark.read.option("header", "true").option("inferSchema", "true").csv(hdfs_input_path)
-    record_count = df.count()
-    
-    print("SPARK: Registros encontrados: " + str(record_count))
-    
-    if record_count > 0:
-        print("SPARK: Realizando limpieza y transformación...")
-        
-        # Limpieza (tu código existente)
-        clean_df = df
-        for column in clean_df.columns:
-            new_column = column.replace(' ', '_').replace('/', '_').replace('-', '_') \\
-                                .replace('(', '').replace(')', '').lower()
-            if new_column != column:
-                clean_df = clean_df.withColumnRenamed(column, new_column)
-        
-        numeric_columns = ['inventory_level', 'units_sold', 'units_ordered', 
-                         'demand_forecast', 'price', 'discount', 'competitor_pricing']
-        
-        for col_name in numeric_columns:
-            if col_name in clean_df.columns:
-                clean_df = clean_df.withColumn(col_name, 
-                    when(col(col_name).isNull(), 0.0).otherwise(col(col_name).cast("double")))
-        
-        string_columns = ['store_id', 'product_id', 'category', 'region', 
-                        'weather_condition', 'seasonality']
-        for col_name in string_columns:
-            if col_name in clean_df.columns:
-                clean_df = clean_df.withColumn(col_name, 
-                    when(col(col_name).isNull(), "Unknown").otherwise(trim(col(col_name))))
-        
-        if 'holiday_promotion' in clean_df.columns:
-            clean_df = clean_df.withColumn('holiday_promotion',
-                when(col('holiday_promotion').isin(['1', 'True', 'true', 'YES', 'Yes']), 1)
-                .when(col('holiday_promotion').isin(['0', 'False', 'false', 'NO', 'No']), 0)
-                .otherwise(0))
-        
-        if 'date' in clean_df.columns:
-            clean_df = clean_df.withColumn('date', 
-                when(col('date').isNull(), date_format(current_date(), 'yyyy-MM-dd'))
-                .otherwise(date_format(to_date(col('date'), 'yyyy-MM-dd'), 'yyyy-MM-dd')))
-        else:
-            clean_df = clean_df.withColumn('date', date_format(current_date(), 'yyyy-MM-dd'))
-
-        print("SPARK: Esquema final:")
-        clean_df.printSchema()
-        clean_df.show(2)
-
-        # --- ESCRITURA EN HIVE (CORREGIDA) ---
-        print("SPARK: Escribiendo datos en Hive...")
-        try:
-            # Usar base de datos default de Hive
-            spark.sql("USE default")
-            
-            # Crear tabla si no existe
-            spark.sql("""
-                CREATE TABLE IF NOT EXISTS retail_sales_raw (
-                    date STRING,
-                    store_id STRING,
-                    product_id STRING,
-                    category STRING,
-                    region STRING,
-                    inventory_level DOUBLE,
-                    units_sold DOUBLE,
-                    units_ordered DOUBLE,
-                    demand_forecast DOUBLE,
-                    price DOUBLE,
-                    discount DOUBLE,
-                    weather_condition STRING,
-                    holiday_promotion INT,
-                    competitor_pricing DOUBLE,
-                    seasonality STRING
-                ) STORED AS ORC
-            """)
-            
-            # Escribir datos
-            clean_df.write \\
-                .mode("append") \\
-                .insertInto("retail_sales_raw")
-            
-            print("SPARK: ✓ Datos escritos en Hive tabla 'retail_sales_raw'")
-            
-            # Verificar
-            table_count = spark.sql("SELECT COUNT(*) FROM retail_sales_raw").collect()[0][0]
-            print("SPARK: Total registros en Hive: {}".format(table_count))  # FIXED: sin f-string
-            
-        except Exception as hive_error:
-            print("SPARK: ✗ Error con Hive: {}".format(str(hive_error)))  # FIXED: sin f-string
-            print("SPARK: Continuando con PostgreSQL...")
-
-        # --- ESCRITURA EN POSTGRESQL (EXISTENTE) ---
-        print("SPARK: Escribiendo datos en PostgreSQL...")
-        
-        jdbc_url = "jdbc:postgresql://postgres:5432/hive"
-        properties = {
-            "user": "hive",
-            "password": "hive", 
-            "driver": "org.postgresql.Driver"
-        }
-
-        clean_df.write \\
-            .mode("append") \\
-            .option("createTableColumnTypes", 
-                   "date VARCHAR(10), store_id VARCHAR(50), product_id VARCHAR(50), " +
-                   "category VARCHAR(50), region VARCHAR(50), inventory_level DOUBLE PRECISION, " +
-                   "units_sold DOUBLE PRECISION, units_ordered DOUBLE PRECISION, " +
-                   "demand_forecast DOUBLE PRECISION, price DOUBLE PRECISION, " +
-                   "discount DOUBLE PRECISION, weather_condition VARCHAR(50), " +
-                   "holiday_promotion INTEGER, competitor_pricing DOUBLE PRECISION, " +
-                   "seasonality VARCHAR(50)") \\
-            .jdbc(url=jdbc_url, table="retail_sales", properties=properties)
-        
-        print("SPARK: ✓ Procesamiento completado - {} registros escritos".format(record_count))
-        
-        # Mover archivos procesados
-        try:
-            from py4j.java_gateway import java_import
-            java_import(spark._jvm, 'org.apache.hadoop.fs.*')
-            fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
-            
-            input_dir = spark._jvm.org.apache.hadoop.fs.Path("/data/input/retail_batch_*.csv")
-            statuses = fs.globStatus(input_dir)
-            
-            for status in statuses:
-                file_path = status.getPath()
-                processed_path = spark._jvm.org.apache.hadoop.fs.Path(
-                    "/data/processed/" + file_path.getName())
-                fs.rename(file_path, processed_path)
-                print("SPARK: Archivo movido: " + file_path.getName())
-                
-        except Exception as fs_e:
-            print("SPARK: Advertencia - No se pudieron mover archivos: {}".format(str(fs_e)))  # FIXED
-        
-    else:
-        print("SPARK: No hay datos nuevos para procesar.")
-
-except Exception as e:
-    print("SPARK: Error: " + str(e))
-    import traceback
-    traceback.print_exc()
-finally:
-    try:
-        spark.stop()
-        print("SPARK: Sesión Spark finalizada")
-    except:
-        pass
-'''
-
-    # Escribir y ejecutar script (código existente)
-    script_path = '/consumer/spark_processing.py'
-    try:
-        with open(script_path, 'w', encoding='utf-8') as f:
-            f.write(spark_script_content)
-        log_message("Script Spark escrito: {}".format(script_path))
-    except Exception as e:
-        log_message("Error escribiendo script Spark: {}".format(e))
-        return False
-    
-    # Limpiar warehouse local antes de ejecutar
-    log_message("Limpiando warehouse local de Spark...")
-    subprocess.run(["rm", "-rf", "/consumer/spark-warehouse"], capture_output=True)
-    
-    cmd = [spark_submit_path, '--master', 'spark://spark-master:7077', 
-           '--driver-class-path', '/opt/spark/jars/postgresql-42.5.0.jar',
-           '--jars', '/opt/spark/jars/postgresql-42.5.0.jar', script_path]
-    
-    log_message("Ejecutando Spark processing con Hive y PostgreSQL...")
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        
-        if result.stdout:
-            for line in result.stdout.split('\n'):
-                if line.strip():
-                    log_message("SPARK: {}".format(line))
-        
-        if result.stderr:
-            for line in result.stderr.split('\n'):
-                if line.strip() and "WARN" not in line and "INFO" not in line:
-                    log_message("SPARK-ERR: {}".format(line))
-        
-        if result.returncode == 0:
-            log_message("Spark processing completado exitosamente")
-            return True
-        else:
-            log_message("Spark processing falló (código: {})".format(result.returncode))
-            return False
-            
-    except subprocess.TimeoutExpired:
-        log_message("Spark processing timeout")
-        return False
-    except Exception as e:
-        log_message("Error ejecutando Spark: {}".format(str(e)))
-        return False
 
 def main():
-    log_message("INICIANDO SPARK CONSUMER (HIVe + POSTGRESQL)")
+    print("=== INICIANDO SPARK CONSUMER (MODO CONTINUO) ===")
     
-    spark_submit_path = find_spark_submit()
-    if not spark_submit_path:
-        log_message("ERROR CRÍTICO: No se puede encontrar spark-submit")
-        return
+    # Definimos el script de PySpark
+    spark_script = """# -*- coding: utf-8 -*-
+import time
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from py4j.java_gateway import java_import
+
+print(">>> INICIALIZANDO SESION SPARK PERSISTENTE...")
+
+# 1. Configuración de Spark (Solo se hace una vez)
+spark = SparkSession.builder \\
+    .appName("RetailDataProcessor-Continuous") \\
+    .config("spark.hadoop.fs.defaultFS", "hdfs://hadoop-namenode:8020") \\
+    .config("hive.metastore.uris", "thrift://hive-metastore:9083") \\
+    .config("spark.sql.warehouse.dir", "hdfs://hadoop-namenode:8020/user/hive/warehouse") \\
+    .config("spark.sql.parquet.mergeSchema", "true") \\
+    .config("spark.sql.adaptive.enabled", "true") \\
+    .enableHiveSupport() \\
+    .getOrCreate()
+
+spark.sparkContext.setLogLevel("WARN")
+print(">>> Sesion Spark iniciada y lista para escuchar.")
+
+# Configuración de rutas
+INPUT_PATH = "/data/input/"
+PROCESSED_PATH_BASE = "/data/processed/"
+
+def get_filesystem():
+    # Obtener objeto FileSystem de Hadoop via JVM
+    java_import(spark._jvm, 'org.apache.hadoop.fs.*')
+    return spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+
+def process_batch():
+    fs = get_filesystem()
+    path_obj = spark._jvm.org.apache.hadoop.fs.Path(INPUT_PATH)
     
-    # Limpiar warehouse local al inicio
-    log_message("Limpiando warehouse local...")
-    subprocess.run(["rm", "-rf", "/consumer/spark-warehouse"], capture_output=True)
+    # 1. Listar archivos explícitamente (Evita leer carpeta genérica)
+    if not fs.exists(path_obj):
+        return 0
+        
+    # Obtener lista de archivos Parquet recursivamente
+    files_to_process = []
     
-    log_message("Esperando inicialización de servicios (30s)...")
-    time.sleep(30)
-    
-    processing_count = 0
-    
-    while True:
-        try:
-            log_message("--- Ciclo de procesamiento #{} ---".format(processing_count))
+    try:
+        remote_iter = fs.listFiles(path_obj, True) # True = recursivo
+        while remote_iter.hasNext():
+            file_status = remote_iter.next()
+            path_str = file_status.getPath().toString()
+            if path_str.endswith(".parquet") and "_temporary" not in path_str:
+                files_to_process.append(path_str)
+    except Exception as e:
+        print("Error listando archivos: " + str(e))
+        return 0
+
+    if not files_to_process:
+        return 0
+        
+    # Procesamos en lotes de máximo 20 archivos para no saturar memoria si se acumulan
+    batch_files = files_to_process[:20]
+    print(">>> Procesando lote de {} archivos...".format(len(batch_files)))
+
+    try:
+        # 2. Leer solo los archivos específicos detectados
+        # Pasamos la lista de archivos a Spark
+        df = spark.read.option("mergeSchema", "true").parquet(*batch_files)
+        
+        count = df.count()
+        print("   -> Registros leidos: {}".format(count))
+        
+        if count > 0:
+            # 3. Escribir a Hive (Append)
+            # Normalizamos columnas por si acaso
+            cols = [c.lower() for c in df.columns]
+            df = df.toDF(*cols)
             
-            success = run_spark_processing()
-            if success:
-                log_message("Procesamiento Spark exitoso - Datos en Hive y PostgreSQL")
-            else:
-                log_message("No hay datos nuevos o error en Spark")
+            # Aseguramos que la tabla existe
+            spark.sql("CREATE TABLE IF NOT EXISTS retail_sales_raw (date STRING, store_id STRING, product_id STRING, category STRING, region STRING, inventory_level BIGINT, units_sold BIGINT, units_ordered BIGINT, demand_forecast DOUBLE, price DOUBLE, discount DOUBLE, weather_condition STRING, holiday_promotion BIGINT, competitor_pricing DOUBLE, seasonality STRING) STORED AS PARQUET LOCATION '/user/hive/warehouse/retail_sales_raw'")
             
-            processing_count += 1
-            log_message("Ciclo completado. Esperando 60 segundos...")
-            time.sleep(60)
+            # Insertar
+            df.write.mode("append").insertInto("retail_sales_raw")
+            print("   -> Datos insertados en Hive")
+
+        # 4. Mover solo los archivos procesados
+        timestamp_dir = "batch_{}".format(int(time.time()))
+        dest_dir = "{}{}".format(PROCESSED_PATH_BASE, timestamp_dir)
+        dest_path_obj = spark._jvm.org.apache.hadoop.fs.Path(dest_dir)
+        
+        if not fs.exists(dest_path_obj):
+            fs.mkdirs(dest_path_obj)
             
-        except KeyboardInterrupt:
-            log_message("Spark Consumer detenido por usuario")
-            break
-        except Exception as e:
-            log_message("Error inesperado: {}".format(str(e)))
-            log_message("Traceback: {}".format(traceback.format_exc()))
-            time.sleep(60)
+        for file_path_str in batch_files:
+            src = spark._jvm.org.apache.hadoop.fs.Path(file_path_str)
+            # Nombre archivo
+            fname = src.getName()
+            dst = spark._jvm.org.apache.hadoop.fs.Path("{}/{}".format(dest_dir, fname))
+            
+            fs.rename(src, dst)
+            
+        print(">>> Lote completado. Archivos movidos a " + timestamp_dir)
+        return count
+
+    except Exception as e:
+        print("!!! Error procesando lote: " + str(e))
+        # No movemos archivos si falló, para reintentar luego
+        return 0
+
+# BUCLE INFINITO DENTRO DE SPARK
+while True:
+    start = time.time()
+    processed_count = process_batch()
+    duration = time.time() - start
+    
+    if processed_count == 0:
+        # Si no hay datos, dormir un poco
+        time.sleep(2) 
+    else:
+        # Si hubo datos, procesar inmediatamente o esperar poco
+        print(">>> Ciclo completado en {:.2f}s".format(duration))
+        time.sleep(1)
+
+"""
+    
+    # Escribir el script interno
+    script_path = "/consumer/runner.py"
+    with open(script_path, "w") as f:
+        f.write(spark_script)
+    
+    print("Script generado en: " + script_path)
+    
+    # Ejecutar Spark Submit
+    cmd = [
+        "/spark/bin/spark-submit",
+        "--master", "spark://spark-master:7077",
+        "--driver-memory", "1g",
+        "--executor-memory", "1g",
+        "--conf", "spark.rpc.message.maxSize=128",
+        script_path
+    ]
+    
+    print("Ejecutando Spark Submit persistente...")
+    subprocess.run(cmd)
 
 if __name__ == "__main__":
     main()
