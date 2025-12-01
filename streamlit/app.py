@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import warnings
-warnings.filterwarnings('ignore')
+from pyarrow import fs
+import pyarrow.parquet as pq
+import time
+from datetime import datetime, timedelta
 
 # Configuración de la página
 st.set_page_config(
@@ -15,66 +14,133 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-def get_postgres_connection():
-    """Establece conexión con PostgreSQL"""
+# === CONFIGURACIÓN ===
+HDFS_NAMENODE_HOST = 'hadoop-namenode'
+HDFS_PORT = 8020
+HDFS_TABLE_PATH = "/user/hive/warehouse/retail_sales_raw"
+
+# Columnas estrictamente necesarias para los gráficos
+REQUIRED_COLUMNS = [
+    'date', 'category', 'region', 'units_sold', 'inventory_level', 
+    'demand_forecast', 'price', 'competitor_pricing', 'holiday_promotion'
+]
+
+@st.cache_data(ttl=60)
+def get_dataset_metadata():
+    """Obtiene solo metadatos ligeros para poblar los filtros sin leer datos."""
     try:
-        conn = psycopg2.connect(
-            host="postgres",
-            database="hive",
-            user="hive",
-            password="hive",
-            port="5432"
+        hdfs = fs.HadoopFileSystem(HDFS_NAMENODE_HOST, HDFS_PORT)
+        dataset = pq.ParquetDataset(HDFS_TABLE_PATH, filesystem=hdfs)
+        categories = dataset.read(columns=['category']).to_pandas()['category'].unique()
+        regions = dataset.read(columns=['region']).to_pandas()['region'].unique()
+        return list(categories), list(regions)
+    except Exception:
+        return [], []
+
+@st.cache_data(ttl=10)
+def load_filtered_data(start_date, end_date, selected_cat, selected_reg):
+    """Lee SOLO los datos necesarios usando pq.read_table."""
+
+    try:
+        # Conexión HDFS
+        hdfs = fs.HadoopFileSystem(HDFS_NAMENODE_HOST, HDFS_PORT)
+        
+        # 1. Construir filtros (Lista de tuplas para PyArrow)
+        # Esto permite que HDFS solo nos envíe las filas que cumplen la condición
+        filters = []
+        
+        # Filtro de fecha (asumiendo formato YYYY-MM-DD en el parquet)
+        filters.append(('date', '>=', start_date.strftime('%Y-%m-%d')))
+        filters.append(('date', '<=', end_date.strftime('%Y-%m-%d')))
+        
+        if selected_cat != 'Todos':
+            filters.append(('category', '==', selected_cat))
+        
+        if selected_reg != 'Todas':
+            filters.append(('region', '==', selected_reg))
+            
+        # 2. Leer usando read_table
+        table = pq.read_table(
+            HDFS_TABLE_PATH,
+            filesystem=hdfs,
+            columns=REQUIRED_COLUMNS,
+            filters=filters
         )
-        return conn
-    except Exception as e:
-        st.error(f"❌ Error conectando a PostgreSQL: {e}")
-        return None
-
-def execute_query(query, params=None):
-    """Ejecuta consulta y retorna DataFrame"""
-    conn = get_postgres_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query(query, conn, params=params)
-            conn.close()
-            return df
-        except Exception as e:
-            st.error(f"❌ Error en consulta: {e}")
-            conn.close()
+        
+        # Convertir a Pandas
+        df = table.to_pandas()
+        
+        if df.empty:
             return pd.DataFrame()
-    return pd.DataFrame()
+        
+        # Asegurar tipos
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
 
-def load_data():
-    """Carga datos principales con cache"""
-    query = """
-    SELECT 
-        date,
-        store_id,
-        product_id,
-        category,
-        region,
-        inventory_level,
-        units_sold,
-        units_ordered,
-        demand_forecast,
-        price,
-        discount,
-        weather_condition,
-        holiday_promotion,
-        competitor_pricing,
-        seasonality,
-        (units_sold * price) as revenue,
-        (units_sold * price * discount) as discount_amount,
-        -- Cálculo de precisión de demanda CORREGIDO para PostgreSQL
-        CASE 
-            WHEN demand_forecast > 0 THEN 
-                CAST((1 - ABS(units_sold - demand_forecast) / demand_forecast) * 100 AS DECIMAL(10,2))
-            ELSE 0 
-        END as forecast_accuracy
-    FROM retail_sales 
-    ORDER BY date DESC
-    """
-    return execute_query(query)
+        # Cálculos vectorizados
+        if 'price' in df.columns and 'units_sold' in df.columns:
+            df['revenue'] = df['price'] * df['units_sold']
+
+        if 'demand_forecast' in df.columns:
+            # Error porcentual correcto basado en valores reales
+            error_pct = abs(df['demand_forecast'] - df['units_sold']) / df['units_sold'].replace(0, 1)
+            # Accuracy = 100 - MAPE
+            df['forecast_accuracy'] = (100 - error_pct * 100).clip(0, 100)
+
+        # Métricas
+        if 'inventory_level' in df.columns:
+            df['inventory_turnover'] = df['units_sold'] / df['inventory_level'].replace(0, 1)
+            df['logistics_cost'] = df['inventory_level'] * 0.15 * 1.2
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error leyendo datos: {str(e)}")
+        # Imprimir error en logs del contenedor para debug
+        print(f"DEBUG ERROR: {e}")
+        return pd.DataFrame()
+    
+@st.cache_data(ttl=5)
+def load_data_from_hdfs():
+    """Lee archivos Parquet directamente desde HDFS usando PyArrow."""
+    try:
+        # 1. Conectar al sistema de archivos distribuido
+        hdfs = fs.HadoopFileSystem(HDFS_NAMENODE_HOST, HDFS_PORT)
+        
+        # 2. Intentamos crear el ParquetDataset directamente desde el directorio raíz.
+        # Esto le permite a PyArrow buscar los metadatos y archivos automáticamente.
+        dataset = pq.ParquetDataset(HDFS_TABLE_PATH,filesystem=hdfs,)
+        
+        # 3. Leer todo el dataset en un DataFrame de Pandas
+        df = dataset.read().to_pandas()
+        
+        if df.empty:
+            st.warning("Se pudo conectar, pero el DataFrame resultante está vacío.")
+            return pd.DataFrame()
+        
+        # Procesamiento
+        df.columns = [c.lower() for c in df.columns]
+
+        if 'price' in df.columns and 'units_sold' in df.columns:
+            df['revenue'] = df['price'] * df['units_sold']
+
+        if 'demand_forecast' in df and 'units_sold' in df:
+            # Error porcentual correcto basado en valores reales
+            error_pct = abs(df['demand_forecast'] - df['units_sold']) / df['units_sold'].replace(0, 1)
+            # Accuracy = 100 - MAPE
+            df['forecast_accuracy'] = (100 - error_pct * 100).clip(0, 100)
+
+        if 'date' in df.columns:
+            # Aseguramos que 'date' se parsea a datetime
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+
+        st.success(f"¡Datos leídos exitosamente! Total de registros: {len(df):,}")
+        return df
+
+    except Exception as e:
+        # Este error ahora solo capturará fallos de I/O o de parsing de Parquet
+        st.error(f"Error al intentar leer el Dataset Parquet: {type(e).__name__}: {str(e)}")
+        return pd.DataFrame()
 
 def calculate_logistics_costs(df):
     """
@@ -84,24 +150,16 @@ def calculate_logistics_costs(df):
     - Tipo de producto (costo categoría)
     """
     # Costos base por región (simulados)
-    region_costs = {
-        'North': 1.2, 'South': 1.0, 'East': 1.3, 
-        'West': 1.4, 'Central': 1.1, 'Northeast': 1.5, 'Southwest': 1.2
-    }
+    region_costs = {'North': 1.2, 'South': 1.0, 'East': 1.3, 'West': 1.4, 'Central': 1.1, 'Northeast': 1.5, 'Southwest': 1.2}
     
     # Costos por categoría (simulados)
-    category_costs = {
-        'Electronics': 1.8, 'Groceries': 1.0, 'Clothing': 1.2,
-        'Furniture': 2.0, 'Toys': 1.3, 'Sports': 1.4, 'Books': 1.1
-    }
+    category_costs = {'Electronics': 1.8, 'Groceries': 1.0, 'Clothing': 1.2,'Furniture': 2.0, 'Toys': 1.3, 'Sports': 1.4, 'Books': 1.1}
     
     # Calcular costos logísticos simulados
     df['base_logistics_cost'] = df['region'].map(region_costs).fillna(1.2)
     df['category_cost_multiplier'] = df['category'].map(category_costs).fillna(1.2)
     df['logistics_cost'] = (
-        df['base_logistics_cost'] * 
-        df['category_cost_multiplier'] * 
-        df['inventory_level'] * 0.1  # Costo por unidad de inventario
+        df['base_logistics_cost'] * df['category_cost_multiplier'] * df['inventory_level'] * 0.1  # Costo por unidad de inventario
     )
     
     return df
@@ -112,9 +170,7 @@ def calculate_efficiency_metrics(df):
     df['inventory_turnover'] = df['units_sold'] / df['inventory_level'].replace(0, 1)
     
     # Eficiencia de precio vs competencia
-    df['pricing_efficiency'] = (
-        (df['price'] - df['competitor_pricing']) / df['competitor_pricing'].replace(0, 1) * 100
-    )
+    df['pricing_efficiency'] = ((df['price'] - df['competitor_pricing']) / df['competitor_pricing'].replace(0, 1) * 100)
     
     # Eficiencia de promociones
     df['promotion_efficiency'] = df['units_sold'] * df['holiday_promotion']
@@ -122,398 +178,437 @@ def calculate_efficiency_metrics(df):
     return df
 
 def main():
-    # Header principal
-    st.title("🏪 Retail Analytics Dashboard")
-    st.markdown("Análisis en tiempo real de ventas minoristas - PostgreSQL")
+    st.title("🏭 Retail Analytics - Scalable Dashboard")
     
-    # Sidebar para filtros
-    st.sidebar.title("🔧 Filtros")
+    # 1. SIDEBAR PRIMERO (Para definir qué cargar)
+    st.sidebar.subheader("🎛️ Filtros de Carga")
+    st.sidebar.info("Filtrar ANTES de cargar evita caídas de memoria.")
     
-    # Cargar datos
-    with st.spinner("🔄 Cargando datos desde PostgreSQL..."):
-        df = load_data()
+    # Obtener metadatos ligeros
+    cat_opts, reg_opts = get_dataset_metadata()
+    categories = ['Todos'] + sorted(cat_opts) if cat_opts else ['Todos']
+    regions = ['Todas'] + sorted(reg_opts) if reg_opts else ['Todas']
     
-    if df.empty:
-        st.warning("📭 No hay datos disponibles. Ejecuta el Spark Consumer primero.")
-        return
-    
-    # Convertir la columna date a datetime
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    
-    # Aplicar cálculos de costos logísticos y eficiencia
-    df = calculate_logistics_costs(df)
-    df = calculate_efficiency_metrics(df)
-    
-    # Filtros en sidebar
-    st.sidebar.subheader("Filtrar Datos")
-    
-    # Filtro por categoría
-    categories = ['Todos'] + sorted(df['category'].dropna().unique().tolist())
+    # Selectores
     selected_category = st.sidebar.selectbox("Categoría", categories)
-    
-    # Filtro por región
-    regions = ['Todas'] + sorted(df['region'].dropna().unique().tolist())
     selected_region = st.sidebar.selectbox("Región", regions)
     
-    # Filtro por fecha
-    if not df.empty:
-        min_date = df['date'].min().date()
-        max_date = df['date'].max().date()
-    else:
-        min_date = pd.Timestamp.now().date()
-        max_date = pd.Timestamp.now().date()
+    # Fechas (Default: Últimos 7 días para no saturar de inicio)
+    today = datetime.now().date()
+    default_start = today - timedelta(days=7)
     
     date_range = st.sidebar.date_input(
         "Rango de Fechas",
-        [min_date, max_date],
-        min_value=min_date,
-        max_value=max_date
+        [default_start, today],
+        max_value=today
     )
     
-    # Aplicar filtros
-    filtered_df = df.copy()
-    
-    if selected_category != 'Todos':
-        filtered_df = filtered_df[filtered_df['category'] == selected_category]
-    
-    if selected_region != 'Todas':
-        filtered_df = filtered_df[filtered_df['region'] == selected_region]
-    
-    # Aplicar filtro de fecha
-    if len(date_range) == 2:
-        start_date, end_date = date_range
-        start_date = pd.to_datetime(start_date)
-        end_date = pd.to_datetime(end_date)
+    if len(date_range) != 2:
+        st.warning("Selecciona un rango de fechas completo.")
+        st.stop()
         
-        filtered_df = filtered_df[
-            (filtered_df['date'] >= start_date) & 
-            (filtered_df['date'] <= end_date)
-        ]
+    start_date, end_date = date_range
+
+    # Botón de refresco manual
+    if st.sidebar.button('🔄 Recargar Datos'):
+        st.cache_data.clear()
+        st.rerun()
+
+    with st.sidebar:
+        auto_refresh = st.checkbox(
+            "🔁 Actualizar automáticamente",
+            value=False,
+            help="Recarga los datos cada 60 segundos sin perder filtros"
+        )
+
+    # 2. CARGA DE DATOS FILTRADOS
+    with st.spinner(f"📡 Cargando datos ({start_date} a {end_date})..."):
+        df = load_filtered_data(start_date, end_date, selected_category, selected_region)
     
+    if df.empty:
+        st.warning("No hay datos para los filtros seleccionados o HDFS está vacío.")
+        time.sleep(5)
+        st.rerun()
+        return
+
+    st.success(f"✅ Datos en memoria: {len(df):,} registros")
+
+    # PROCESAMIENTO EXTRA
+    df = calculate_logistics_costs(df)
+    df = calculate_efficiency_metrics(df)
+
     # =============================================
-    # 🚨 NUEVA SECCIÓN: ALERTAS DE STOCK BAJO
+    # DASHBOARD COMPLETO
     # =============================================
-    st.subheader("🚨 Alertas y Monitoreo")
-    
-    # Configurar umbral de stock bajo
-    stock_threshold = st.slider(
-        "Umbral de alerta de stock bajo", 
-        min_value=0, 
-        max_value=50, 
-        value=10,
-        help="Nivel de inventario mínimo para generar alertas"
+
+    st.subheader("📦 Nivel de Stock")
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_cat = st.multiselect(
+            "Categoría",
+            df["category"].unique(),
+            default=df["category"].unique(),
+            key="stock_cat"
+        )
+
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="stock_reg"
+        )
+
+    df_plot = df[
+        df["category"].isin(f_cat) &
+        df["region"].isin(f_reg)
+    ]
+
+    stock_region = df_plot.groupby("region")["inventory_level"].sum().reset_index()
+
+    fig_stock = px.bar(
+        stock_region,
+        x="region",
+        y="inventory_level",
+        title="Inventario total por región"
     )
-    
-    # Identificar productos con stock bajo
-    low_stock_items = filtered_df[filtered_df['inventory_level'] < stock_threshold]
-    
-    col_alert1, col_alert2, col_alert3 = st.columns(3)
-    
-    with col_alert1:
-        total_low_stock = len(low_stock_items)
-        st.metric(
-            "Productos con Stock Bajo", 
-            total_low_stock,
-            delta=f"Umbral: {stock_threshold}" if total_low_stock > 0 else "Todo OK",
-            delta_color="inverse" if total_low_stock > 0 else "normal"
+
+    st.plotly_chart(fig_stock, use_container_width=True)
+
+
+    # =============================================
+    # 🔮 PREDICCIÓN VS REAL
+    # =============================================
+
+    st.subheader("🔮 Predicción de Demanda")
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_cat = st.multiselect(
+            "Categoría",
+            df["category"].unique(),
+            default=df["category"].unique(),
+            key="forecast_cat"
         )
-    
-    with col_alert2:
-        # Alertas de demanda vs inventario
-        high_demand_low_stock = filtered_df[
-            (filtered_df['demand_forecast'] > filtered_df['inventory_level']) & 
-            (filtered_df['inventory_level'] < stock_threshold * 2)
-        ]
-        st.metric(
-            "Riesgo de Desabastecimiento", 
-            len(high_demand_low_stock),
-            help="Productos con alta demanda pronosticada y bajo inventario"
+
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="forecast_reg"
         )
-    
-    with col_alert3:
-        # Eficiencia de pronósticos
-        avg_accuracy = filtered_df['forecast_accuracy'].mean()
-        st.metric(
-            "Precisión de Pronósticos", 
-            f"{avg_accuracy:.1f}%",
-            delta="Alta" if avg_accuracy > 80 else "Media" if avg_accuracy > 60 else "Baja",
-            delta_color="normal" if avg_accuracy > 80 else "off"
-        )
-    
-    # Mostrar tabla de alertas detalladas
-    if not low_stock_items.empty:
-        with st.expander("📋 Detalle de Alertas de Stock Bajo", expanded=False):
-            alert_cols = ['product_id', 'category', 'region', 'inventory_level', 'demand_forecast', 'units_sold']
-            st.dataframe(
-                low_stock_items[alert_cols].sort_values('inventory_level').head(10),
-                use_container_width=True
-            )
-    
-    # =============================================
-    # 📈 MÉTRICAS PRINCIPALES (MEJORADAS)
-    # =============================================
-    st.subheader("📈 Métricas Clave")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        total_revenue = filtered_df['revenue'].sum()
-        st.metric("Ingreso Total", f"${total_revenue:,.2f}")
-    
-    with col2:
-        total_units = filtered_df['units_sold'].sum()
-        st.metric("Unidades Vendidas", f"{total_units:,.0f}")
-    
-    with col3:
-        # NUEVO: Costos logísticos totales
-        total_logistics = filtered_df['logistics_cost'].sum()
-        st.metric("Costos Logísticos", f"${total_logistics:,.2f}")
-    
-    with col4:
-        avg_inventory = filtered_df['inventory_level'].mean()
-        st.metric("Inventario Promedio", f"{avg_inventory:.1f}")
-    
-    with col5:
-        # NUEVO: Eficiencia general
-        avg_turnover = filtered_df['inventory_turnover'].mean()
-        st.metric("Rotación de Inventario", f"{avg_turnover:.2f}")
-    
-    # =============================================
-    # 🗺️ NUEVA SECCIÓN: MAPAS Y RUTAS (SIMULADO)
-    # =============================================
-    st.subheader("🗺️ Análisis Geográfico y Logístico")
-    
-    col_map1, col_map2 = st.columns(2)
-    
-    with col_map1:
-        # Mapa de calor por región (simulado)
-        st.markdown("**📊 Actividad por Región**")
-        region_activity = filtered_df.groupby('region').agg({
-            'revenue': 'sum',
-            'units_sold': 'sum',
-            'logistics_cost': 'sum'
+
+    df_plot = df[
+        df["category"].isin(f_cat) &
+        df["region"].isin(f_reg)
+    ]
+
+    # --- Comparación temporal ---
+    if df_plot['date'].nunique() > 1:
+
+        daily_compare = df_plot.groupby('date').agg({
+            'units_sold':'sum',
+            'demand_forecast':'sum'
         }).reset_index()
-        
-        if not region_activity.empty:
-            fig_region = px.bar(
-                region_activity,
-                x='region',
-                y=['revenue', 'logistics_cost'],
-                title="Ingresos vs Costos Logísticos por Región",
-                barmode='group'
-            )
-            st.plotly_chart(fig_region, use_container_width=True)
-    
-    with col_map2:
-        # Eficiencia logística por región
-        st.markdown("**📦 Eficiencia Logística**")
-        region_efficiency = filtered_df.groupby('region').agg({
-            'logistics_cost': 'sum',
-            'units_sold': 'sum',
-            'inventory_turnover': 'mean'
-        }).reset_index()
-        
-        region_efficiency['cost_per_unit'] = (
-            region_efficiency['logistics_cost'] / region_efficiency['units_sold'].replace(0, 1)
+
+        fig = px.line(
+            daily_compare,
+            x='date',
+            y=['units_sold','demand_forecast'],
+            title="Demanda Real vs Pronóstico (por Día)"
         )
-        
-        if not region_efficiency.empty:
-            fig_efficiency = px.scatter(
-                region_efficiency,
-                x='cost_per_unit',
-                y='inventory_turnover',
-                size='units_sold',
-                color='region',
-                title="Eficiencia: Costo vs Rotación por Región",
-                hover_name='region'
-            )
-            st.plotly_chart(fig_efficiency, use_container_width=True)
-    
-    # =============================================
-    # ⚡ NUEVA SECCIÓN: COMPARACIÓN DE EFICIENCIA
-    # =============================================
-    st.subheader("⚡ Análisis de Eficiencia Comparada")
-    
-    col_eff1, col_eff2 = st.columns(2)
-    
-    with col_eff1:
-        # Eficiencia por categoría
-        category_efficiency = filtered_df.groupby('category').agg({
-            'inventory_turnover': 'mean',
-            'forecast_accuracy': 'mean',
-            'pricing_efficiency': 'mean',
-            'revenue': 'sum'
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Comparación categórica ---
+    else:
+        st.info("Datos de una sola fecha → Mostrando comparación por categoría")
+
+        cat_compare = df_plot.groupby('category').agg({
+            'units_sold':'sum',
+            'demand_forecast':'sum'
         }).reset_index()
+
+        fig = px.bar(
+            cat_compare,
+            x='category',
+            y=['units_sold','demand_forecast'],
+            barmode='group',
+            title="Demanda Real vs Pronóstico por Categoría"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # =============================================
+    # 📉 VISUALIZACIÓN DE PRECISIÓN DE PRONÓSTICO
+    # =============================================
+
+    st.subheader("📉 Precisión del Forecast")
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_cat = st.multiselect(
+            "Categoría",
+            df["category"].unique(),
+            default=df["category"].unique(),
+            key="error_cat"
+        )
+
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="error_reg"
+        )
+
+    df_plot = df[
+        df["category"].isin(f_cat) &
+        df["region"].isin(f_reg)
+    ]
+
+    # Asegurar que las columnas existen
+    if {'demand_forecast', 'units_sold', 'date'}.issubset(df.columns):
+
+        # Error absoluto
+        df_plot['forecast_error_units'] = abs(df_plot['demand_forecast'] - df_plot['units_sold'])
         
-        if not category_efficiency.empty:
-            fig_category_eff = px.bar(
-                category_efficiency,
-                x='category',
-                y='inventory_turnover',
-                title="Rotación de Inventario por Categoría",
-                color='inventory_turnover',
-                color_continuous_scale='viridis'
-            )
-            st.plotly_chart(fig_category_eff, use_container_width=True)
-    
-    with col_eff2:
-        # Comparación de eficiencia temporal
-        if not filtered_df.empty and 'date' in filtered_df.columns:
-            daily_efficiency = filtered_df.groupby('date').agg({
-                'inventory_turnover': 'mean',
-                'forecast_accuracy': 'mean',
-                'logistics_cost': 'sum'
-            }).reset_index()
-            
-            if not daily_efficiency.empty:
-                fig_trend_eff = go.Figure()
-                fig_trend_eff.add_trace(go.Scatter(
-                    x=daily_efficiency['date'], 
-                    y=daily_efficiency['inventory_turnover'],
-                    name='Rotación Inventario',
-                    line=dict(color='blue')
-                ))
-                fig_trend_eff.add_trace(go.Scatter(
-                    x=daily_efficiency['date'], 
-                    y=daily_efficiency['forecast_accuracy'] / 100,
-                    name='Precisión Pronósticos (escala 0-1)',
-                    line=dict(color='green', dash='dash')
-                ))
-                fig_trend_eff.update_layout(title="Tendencia de Eficiencia Diaria")
-                st.plotly_chart(fig_trend_eff, use_container_width=True)
-    
+        # Porcentaje de error (MAPE-like)
+        df_plot['forecast_error_pct'] = (
+            df_plot['forecast_error_units'] /
+            df_plot['units_sold'].replace(0, 1)
+        ) * 100
+        
+        # MÉTRICAS 
+        total_real = df_plot['units_sold'].sum()
+        total_forecast = df_plot['demand_forecast'].sum()
+
+        # Evitar división por cero
+        if total_real == 0:
+            avg_error_pct = 0
+            avg_accuracy = 100
+        else:
+            avg_error_pct = abs(total_forecast - total_real) / total_real * 100
+            avg_accuracy = max(0, 100 - avg_error_pct)
+
+        avg_error_units = (
+            abs(df_plot['demand_forecast'] - df_plot['units_sold'])
+            .mean()
+        )
+
+        # ---- KPIs DEL FORECAST ----
+        col_f1, col_f2, col_f3 = st.columns(3)
+
+        col_f1.metric(
+            "✅ Precisión Media",
+            f"{avg_accuracy:.2f} %"
+        )
+
+        col_f2.metric(
+            "📉 Error Medio (Unidades)",
+            f"{avg_error_units:,.1f}"
+        )
+
+        col_f3.metric(
+            "📊 Error Porcentual Medio",
+            f"{avg_error_pct:.2f} %",
+            delta="Bueno" if avg_error_pct < 25 else "Moderado" if avg_error_pct < 40 else "Alto"
+        )
+
+        # ---- TENDENCIA DIARIA DEL ERROR ----
+        daily_error = df_plot.groupby('date').agg({
+            'forecast_error_units': 'mean',
+            'forecast_error_pct': 'mean'
+        }).reset_index()
+
+        fig_error = px.line(
+            daily_error,
+            x='date',
+            y='forecast_error_pct',
+            title="📈 Evolución diaria del Error de Forecast (%)",
+            markers=True
+        )
+
+        fig_error.update_layout(
+            yaxis_title="Error Porcentual (%)",
+            xaxis_title="Fecha",
+            hovermode="x unified"
+        )
+
+        st.plotly_chart(fig_error, use_container_width=True)
+
+    else:
+        st.warning("No hay datos suficientes para calcular el error de predicción.")
+
+
     # =============================================
-    # 📊 GRÁFICAS EXISTENTES (MANTENIDAS)
+    # 🚚 COSTOS LOGÍSTICOS
     # =============================================
-    st.subheader("📊 Análisis Visual Tradicional")
-    
-    # Primera fila de gráficas (existente)
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if not filtered_df.empty and 'category' in filtered_df.columns:
-            category_sales = filtered_df.groupby('category')['revenue'].sum().reset_index()
-            if not category_sales.empty:
-                fig1 = px.bar(
-                    category_sales, 
-                    x='category', 
-                    y='revenue',
-                    title="Ingresos por Categoría",
-                    color='revenue',
-                    color_continuous_scale='viridis'
-                )
-                fig1.update_layout(xaxis_title="Categoría", yaxis_title="Ingresos ($)")
-                st.plotly_chart(fig1, use_container_width=True)
-    
-    with col2:
-        if not filtered_df.empty and 'date' in filtered_df.columns:
-            daily_sales = filtered_df.groupby('date')['units_sold'].sum().reset_index()
-            if not daily_sales.empty:
-                fig2 = px.line(
-                    daily_sales,
-                    x='date',
-                    y='units_sold',
-                    title="Tendencia de Ventas Diarias",
-                    line_shape='spline'
-                )
-                fig2.update_layout(xaxis_title="Fecha", yaxis_title="Unidades Vendidas")
-                st.plotly_chart(fig2, use_container_width=True)
-    
-    # =============================================
-    # 🔍 ANÁLISIS DETALLADO (MEJORADO)
-    # =============================================
-    st.subheader("🔍 Análisis Detallado y Predictivo")
-    
-    col_anal1, col_anal2 = st.columns(2)
-    
-    with col_anal1:
-        # Demanda vs Real (mejorado)
-        if not filtered_df.empty and all(col in filtered_df.columns for col in ['date', 'units_sold', 'demand_forecast']):
-            demand_comparison = filtered_df.groupby('date').agg({
-                'units_sold': 'sum',
-                'demand_forecast': 'sum'
-            }).reset_index()
-            
-            if not demand_comparison.empty:
-                fig_demand = go.Figure()
-                fig_demand.add_trace(go.Scatter(
-                    x=demand_comparison['date'], 
-                    y=demand_comparison['units_sold'],
-                    name='Ventas Reales',
-                    line=dict(color='blue')
-                ))
-                fig_demand.add_trace(go.Scatter(
-                    x=demand_comparison['date'], 
-                    y=demand_comparison['demand_forecast'],
-                    name='Pronóstico',
-                    line=dict(color='red', dash='dash')
-                ))
-                fig_demand.update_layout(title="Comparación: Demanda Real vs Pronosticada")
-                st.plotly_chart(fig_demand, use_container_width=True)
-    
-    with col_anal2:
-        # Análisis de eficiencia de promociones
-        if not filtered_df.empty and 'holiday_promotion' in filtered_df.columns:
-            promotion_analysis = filtered_df.groupby('holiday_promotion').agg({
-                'units_sold': 'mean',
-                'revenue': 'mean',
-                'inventory_turnover': 'mean'
-            }).reset_index()
-            promotion_analysis['promotion_type'] = promotion_analysis['holiday_promotion'].map(
-                {0: 'Sin Promoción', 1: 'Con Promoción'}
-            )
-            
-            if not promotion_analysis.empty:
-                fig_promo = px.bar(
-                    promotion_analysis,
-                    x='promotion_type',
-                    y=['units_sold', 'revenue'],
-                    title="Impacto de Promociones en Ventas e Ingresos",
-                    barmode='group'
-                )
-                st.plotly_chart(fig_promo, use_container_width=True)
-    
-    # =============================================
-    # 📋 TABLA DE DATOS (MEJORADA)
-    # =============================================
-    st.subheader("📋 Datos Detallados con Métricas de Eficiencia")
-    
-    # Selector de columnas para mostrar (mejorado)
-    default_cols = ['date', 'category', 'region', 'units_sold', 'inventory_level', 
-                   'demand_forecast', 'logistics_cost', 'inventory_turnover']
-    available_cols = filtered_df.columns.tolist()
-    selected_cols = st.multiselect(
-        "Selecciona columnas para mostrar:",
-        available_cols,
-        default=default_cols
+
+    st.subheader("🚚 Costos logísticos")
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_cat = st.multiselect(
+            "Categoría",
+            df["category"].unique(),
+            default=df["category"].unique(),
+            key="cost_cat"
+        )
+
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="cost_reg"
+        )
+
+    df_plot = df[
+        df["category"].isin(f_cat) &
+        df["region"].isin(f_reg)
+    ]
+
+    cost_region = df_plot.groupby("region")["logistics_cost"].sum().reset_index()
+
+    fig_cost = px.bar(
+        cost_region,
+        x="region",
+        y="logistics_cost",
+        title="Costo logístico por región"
     )
-    
-    if selected_cols:
-        display_df = filtered_df[selected_cols].copy()
-        if 'date' in display_df.columns:
-            display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
-            
+
+    st.plotly_chart(fig_cost, use_container_width=True)
+
+
+    # =============================================
+    # ⚖️ COMPARACIÓN DE EFICIENCIA
+    # =============================================
+
+    st.subheader("⚖️ Eficiencia Operativa por Región")
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_cat = st.multiselect(
+            "Categoría",
+            df["category"].unique(),
+            default=df["category"].unique(),
+            key="eff_cat"
+        )
+
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="eff_reg"
+        )
+
+    df_plot = df[
+        df["category"].isin(f_cat) &
+        df["region"].isin(f_reg)
+    ]
+
+    efficiency = df_plot.groupby("region").agg(
+        turnover=("inventory_turnover", "mean"),
+        pricing=("pricing_efficiency", "mean"),
+        forecast_acc=("forecast_accuracy", "mean")
+    ).reset_index()
+
+    st.dataframe(efficiency.round(2), use_container_width=True)
+
+
+    # =============================================
+    # 🚨 ALERTAS DE STOCK BAJO
+    # =============================================
+
+    st.subheader("🚨 Alertas de Stock")
+
+    threshold = st.slider("Umbral mínimo de stock", 5, 100, 20)
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_cat = st.multiselect(
+            "Categoría",
+            df["category"].unique(),
+            default=df["category"].unique(),
+            key="alert_cat"
+        )
+
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="alert_reg"
+        )
+
+    df_plot = df[
+        df["category"].isin(f_cat) &
+        df["region"].isin(f_reg)
+    ]
+
+    alerts = df_plot[df_plot["inventory_level"] < threshold]
+
+    if alerts.empty:
+        st.success("✅ No hay productos con stock crítico.")
+    else:
+        st.error(f"⚠️ {len(alerts)} productos sobrepasan el umbral crítico")
         st.dataframe(
-            display_df.sort_values('date' if 'date' in display_df.columns else selected_cols[0], ascending=False),
-            use_container_width=True,
-            height=400
+            alerts[
+                ["date", "category", "region", "inventory_level",
+                "units_sold", "demand_forecast"]
+            ],
+            use_container_width=True
         )
-    
-    # Estadísticas descriptivas (mejoradas)
-    st.subheader("📊 Estadísticas Descriptivas Completas")
-    
-    numeric_cols = filtered_df.select_dtypes(include=['float64', 'int64']).columns
-    if len(numeric_cols) > 0:
-        st.dataframe(filtered_df[numeric_cols].describe(), use_container_width=True)
-    
-    # Información del sistema (mejorada)
-    with st.expander("ℹ️ Información del Sistema y Métricas"):
-        st.info(f"**Fuente de datos:** PostgreSQL")
-        st.info(f"**Total de registros:** {len(filtered_df):,}")
-        if not filtered_df.empty and 'date' in filtered_df.columns:
-            st.info(f"**Período de datos:** {filtered_df['date'].min().strftime('%Y-%m-%d')} a {filtered_df['date'].max().strftime('%Y-%m-%d')}")
-        st.info(f"**Métricas calculadas:** Costos logísticos, Eficiencia, Rotación de inventario, Alertas de stock")
-        st.info(f"**Última actualización:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+    # =============================================
+    # 🗺️ MAPA DE RUTAS LOGISTICAS ACTIVAS
+    # =============================================
+
+    st.subheader("🗺️ Rutas Logísticas Activas")
+
+    with st.expander("🔎 Filtros del gráfico"):
+        f_reg = st.multiselect(
+            "Región",
+            df["region"].unique(),
+            default=df["region"].unique(),
+            key="map_reg"
+        )
+
+    df_plot = df[df["region"].isin(f_reg)]
+
+    # Coordenadas simuladas por región
+    REGION_COORDS = {
+        "North": (45, -100),
+        "South": (30, -95),
+        "East": (40, -75),
+        "West": (37, -120),
+        "Central": (39, -98)
+    }
+
+    routes = []
+
+    for reg, coords in REGION_COORDS.items():
+        if reg in df_plot["region"].unique():
+            routes.append({
+                "region": reg,
+                "lat": coords[0],
+                "lon": coords[1],
+                "volume": df_plot[df_plot["region"] == reg]["units_sold"].sum()
+            })
+
+    map_df = pd.DataFrame(routes)
+
+    fig_map = px.scatter_geo(
+        map_df,
+        lat="lat",
+        lon="lon",
+        size="volume",
+        hover_name="region",
+        title="Actividad Logística por Región",
+        projection="natural earth"
+    )
+
+    st.plotly_chart(fig_map, use_container_width=True)
+
+
+    # Tabla Raw (Limitada a 100 filas para no tumbar el navegador)
+    with st.expander("Ver Datos Crudos (Muestra 100)"):
+        st.dataframe(df_plot.head(100), use_container_width=True)
+
+    if auto_refresh:
+        time.sleep(60)
+        st.rerun()
 
 if __name__ == "__main__":
     main()
