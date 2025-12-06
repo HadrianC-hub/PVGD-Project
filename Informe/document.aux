@@ -9,15 +9,39 @@
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
 \babel@aux{spanish}{}
-\@writefile{toc}{\contentsline {section}{Resumen}{2}{section*.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {1}Dataset seleccionado}{2}{section.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {2}Volumen}{2}{section.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Muestra del esquema (columnas)}{3}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Características}{3}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Pertinencia con el objetivo}{4}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Arquitectura propuesta: \textbf  {Batch}}{4}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Descripción general}{4}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Ventajas del enfoque batch}{4}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Diagrama del sistema y descripción de componentes}{5}{section.7}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Arquitectura general del sistema distribuido para optimización de inventarios y logística.}}{5}{figure.1}\protected@file@percent }
-\gdef \@abspage@last{7}
+\@writefile{toc}{\contentsline {section}{Estructura general del proyecto}{2}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1}Arquitectura propuesta}{2}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Objetivos cuantificables del sistema}{2}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Descripción general}{3}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Ventajas y justificación del enfoque adoptado}{3}{subsection.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}Relación entre arquitectura técnica y problema de negocio}{4}{subsection.1.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.5}Diagrama del sistema y descripción de componentes}{5}{subsection.1.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Arquitectura general del sistema distribuido para optimización de inventarios, predicción de demanda y cálculo de métricas logísticas.}}{5}{figure.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Flujo de comunicación:}{6}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Dataset seleccionado}{7}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Volumen del dataset}{7}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Pertinencia con el objetivo}{8}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Funcionamiento del generador de datos}{8}{section.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Ejecución del Data Producer tras 10 minutos generando lotes sucesivos de observaciones sintéticas, demostrando el flujo continuo de ingestión de datos hacia HDFS.}}{9}{figure.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Introducción de perturbaciones en el Data Producer}{10}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Detalles del procesamiento del Spark Consumer}{11}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Resumen funcional del Spark Consumer}{12}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Tipo de Job Spark utilizado}{12}{subsection.4.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Ejecución persistente del Spark Consumer procesando micro-lotes Parquet desde HDFS e insertando resultados incrementales en Hive.}}{13}{figure.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Operaciones de transformación}{13}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Operaciones de carga en Hive}{14}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Gestión de archivos procesados}{15}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Esquema de tolerancia a fallos}{15}{subsection.4.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Visualización de resultados}{16}{section.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Interfaz Streamlit mostrando la cantidad de datos procesados tras 10 minutos de ejecución.}}{16}{figure.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Interfaz Streamlit mostrando la comparación histórica entre demanda real y pronósticos tras más de 10 minutos de ingestión continua, evidenciando el crecimiento del volumen de datos analizados y las métricas agregadas del sistema.}}{17}{figure.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Interfaz Streamlit mostrando los costos logísticos para mantener el stock de productos tras 10 minutos de ejecución. Se muestra una comparación entre regiones, aunque esto es modificable por filtros en la aplicación.}}{17}{figure.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Interfaz Streamlit mostrando los productos que sobrepasaron el umbral definido por el usuario y que se consideran escasos en el stock. Abajo se muestra el mapa de rutas logísticas, que informa de la actividad en diversas regiones. Solo se muestran las 4 regiones comprendidas en el dataset original.}}{18}{figure.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Monitoreo y métricas del clúster}{18}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Estado del HDFS}{19}{subsection.6.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Interfaz de administración de HDFS mostrando DataNodes activos, capacidad utilizada y volumen acumulado de datos ingresados durante la ejecución del sistema durante 10 minutos. En la imagen se puede apreciar la homogeneidad del espacio dedicado y el balance adecuado de los archivos almacenados según el espacio usado.}}{19}{figure.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Ejecución Spark y consumo de recursos}{20}{subsection.6.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Panel de control del clúster Spark mostrando ejecución de aplicaciones, asignación de ejecutores y consumo de recursos del sistema tras 10 minutos de ejecución. Las dos tareas completadas forman parte de la inicialización del esquema y creación de las tablas. La tarea activa representa el procesamiento de datos entrantes por el consumer. Ambos nodos workers trabajan al unísono consumiendo toda la capacidad de procesamiento dedicado y la memoria RAM necesaria.}}{20}{figure.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Análisis de tiempos de procesamiento}{20}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Identificación de cuellos de botella}{21}{subsection.6.4}\protected@file@percent }
+\gdef \@abspage@last{22}

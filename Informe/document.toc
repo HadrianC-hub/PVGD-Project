@@ -1,11 +1,27 @@
 \babel@toc {spanish}{}\relax 
-\contentsline {section}{Resumen}{2}{section*.2}%
-\contentsline {section}{\numberline {1}Dataset seleccionado}{2}{section.1}%
-\contentsline {section}{\numberline {2}Volumen}{2}{section.2}%
-\contentsline {section}{\numberline {3}Muestra del esquema (columnas)}{3}{section.3}%
-\contentsline {section}{\numberline {4}Características}{3}{section.4}%
-\contentsline {section}{\numberline {5}Pertinencia con el objetivo}{4}{section.5}%
-\contentsline {section}{\numberline {6}Arquitectura propuesta: \textbf {Batch}}{4}{section.6}%
-\contentsline {subsection}{\numberline {6.1}Descripción general}{4}{subsection.6.1}%
-\contentsline {subsection}{\numberline {6.2}Ventajas del enfoque batch}{4}{subsection.6.2}%
-\contentsline {section}{\numberline {7}Diagrama del sistema y descripción de componentes}{5}{section.7}%
+\contentsline {section}{Estructura general del proyecto}{2}{section*.2}%
+\contentsline {section}{\numberline {1}Arquitectura propuesta}{2}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Objetivos cuantificables del sistema}{2}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Descripción general}{3}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Ventajas y justificación del enfoque adoptado}{3}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}Relación entre arquitectura técnica y problema de negocio}{4}{subsection.1.4}%
+\contentsline {subsection}{\numberline {1.5}Diagrama del sistema y descripción de componentes}{5}{subsection.1.5}%
+\contentsline {paragraph}{Flujo de comunicación:}{6}{section*.5}%
+\contentsline {section}{\numberline {2}Dataset seleccionado}{7}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Volumen del dataset}{7}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Pertinencia con el objetivo}{8}{subsection.2.2}%
+\contentsline {section}{\numberline {3}Funcionamiento del generador de datos}{8}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Introducción de perturbaciones en el Data Producer}{10}{subsection.3.1}%
+\contentsline {section}{\numberline {4}Detalles del procesamiento del Spark Consumer}{11}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Resumen funcional del Spark Consumer}{12}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Tipo de Job Spark utilizado}{12}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Operaciones de transformación}{13}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Operaciones de carga en Hive}{14}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Gestión de archivos procesados}{15}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Esquema de tolerancia a fallos}{15}{subsection.4.6}%
+\contentsline {section}{\numberline {5}Visualización de resultados}{16}{section.5}%
+\contentsline {section}{\numberline {6}Monitoreo y métricas del clúster}{18}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Estado del HDFS}{19}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Ejecución Spark y consumo de recursos}{20}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Análisis de tiempos de procesamiento}{20}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Identificación de cuellos de botella}{21}{subsection.6.4}%

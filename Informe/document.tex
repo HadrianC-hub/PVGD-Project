@@ -1,28 +1,16 @@
 \documentclass[12pt,a4paper]{article}
-
-% --- Idioma y codificación ---
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[spanish]{babel}
-
-% --- Tipografía y microajuste ---
 \usepackage{lmodern}
 \usepackage{microtype}
-
-% --- Márgenes ---
 \usepackage{geometry}
 \geometry{left=3cm,right=3cm,top=3cm,bottom=3cm}
-
-% --- Gráficos (logo y diagrama) ---
 \usepackage{graphicx}
 \usepackage{xcolor}
 \definecolor{uhblue}{HTML}{0B3D91}
-
-% --- Espaciado ---
 \usepackage{setspace}
 \onehalfspacing
-
-% --- Tablas y código ---
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{listings}
@@ -32,20 +20,14 @@
 	frame=single,
 	showstringspaces=false
 }
-
-% --- TikZ (opcional para diagramas simples) ---
 \usepackage{tikz}
 \usetikzlibrary{shapes,arrows.meta,positioning}
-
-% --- Hipervínculos ---
 \usepackage{hyperref}
 \hypersetup{
 	colorlinks=true,
 	linkcolor=uhblue,
 	urlcolor=uhblue
 }
-
-% --- Encabezado / Pie ---
 \usepackage{fancyhdr}
 \pagestyle{fancy}
 \fancyhf{}
@@ -53,12 +35,8 @@
 \fancyhead[R]{\thepage}
 \fancyfoot[C]{Facultad de Matemática y Computación --- Universidad de La Habana}
 
-% --- Documento ---
+
 \begin{document}
-	
-	% -------------------------
-	% Portada
-	% -------------------------
 	\begin{titlepage}
 		\centering
 		\vspace*{1cm}
@@ -80,53 +58,166 @@
 		\vspace*{0.8cm}
 	\end{titlepage}
 	
-	% -------------------------
-	% Índice
-	% -------------------------
 	\tableofcontents
 	\thispagestyle{empty}
 	\newpage
 	
-	% -------------------------
-	% Resumen
-	% -------------------------
-	\section*{Resumen}
-	\addcontentsline{toc}{section}{Resumen}
+	\section*{Estructura general del proyecto}
+	\addcontentsline{toc}{section}{Estructura general del proyecto}
 	El presente proyecto implementa un \textbf{cluster distribuido (HDFS + YARN + Hive + Spark)} sobre contenedores Docker para simular, procesar y analizar grandes volúmenes de datos de ventas e inventario, y para entregar predicciones de demanda y métricas de logística en tiempo real mediante una interfaz \textit{Streamlit}. 
 	
-	El sistema permite experimentar con ingestión en \textbf{batch}, limpiar y transformar los datos con Spark, persistir resultados en \textit{Postgres} y mostrar dashboards interactivos con estadísticas y predicciones. El objetivo final es reducir roturas de stock y optimizar costes logísticos mediante predicción de demanda y políticas de reposición automáticas o asistidas.
+	El sistema permite experimentar con ingestión híbrida \textbf{batch + streaming}, limpiar y transformar los datos con Spark, persistir resultados en \textit{Hive} y mostrar dashboards interactivos con estadísticas y predicciones. El objetivo final es reducir roturas de stock y optimizar costes logísticos mediante predicción de demanda y políticas de reposición automáticas o asistidas.
 	
-	\bigskip
+	\subsection*{Contexto operativo del problema logístico}
 	
-	% -------------------------
-	% Dataset seleccionado
-	% -------------------------
+	El dominio del problema se centra en la gestión integrada de inventarios y abastecimiento para cadenas de retail con múltiples tiendas y productos. El objetivo principal es anticipar la demanda futura para evitar dos situaciones críticas:
+	
+	\begin{itemize}
+		\item \textbf{Rotura de stock}: pérdida de ventas y deterioro del nivel de servicio al cliente.
+		\item \textbf{Sobreabastecimiento}: incremento de costes de almacenamiento, deterioro de mercancía y capital inmovilizado.
+	\end{itemize}
+	
+	El sistema busca modelar la dinámica real diaria de un sistema de retail, donde las ventas fluctúan por promociones, clima, estacionalidad y competencia, lo cual exige decisiones de reposición continuas, basadas en datos históricos recientes y condiciones externas.
+	
+	
+	\section{Arquitectura propuesta}
+	A continuación se describe la arquitectura adoptada para el desarrollo del sistema, la cual se basa en un enfoque híbrido \textbf{batch + streaming}, combinando la robustez del procesamiento por lotes con la capacidad de actualización contínua de datos. Esta elección permite procesar grandes volúmenes de información de forma eficiente, manteniendo al mismo tiempo la posibilidad de incorporar nuevas observaciones en ciclos sucesivos sin reconstruir el conjunto completo.
+	
+	\subsection{Objetivos cuantificables del sistema}
+	
+	La arquitectura propuesta se diseñó para cumplir los siguientes objetivos medibles:
+	
+	\begin{itemize}
+		\item Reducir el error medio de predicción de demanda (\textit{MAE}) por debajo del 15--20~\%.
+		\item Mejorar la exactitud promedio de los pronósticos por encima del 75~\%.
+		\item Detectar potenciales roturas de inventario con un horizonte de anticipación mínimo de 3 días.
+		\item Procesar un gran volúmen de registros diarios sin degradación de latencia perceptible en el dashboard.
+		\item Garantizar la actualización continua de métricas con intervalos de refresco.
+	\end{itemize}
+	
+	
+	\subsection{Descripción general}
+	El pipeline propuesto está compuesto por las siguientes etapas:
+	
+	\begin{enumerate}
+		\item Generación e ingesta de datos estructurados en formato CSV, simulando flujos de ventas y variaciones externas.
+		\item Almacenamiento inicial de los datos en \textbf{HDFS}.
+		\item Procesamiento distribuido mediante \textbf{Spark}, donde se realizan tareas de limpieza, validación y normalización.
+		\item Persistencia de resultados a través de \textbf{Hive}.
+		\item Visualización interactiva mediante \textbf{Streamlit}, ofreciendo dashboards con métricas operativas, indicadores de precisión de predicción y análisis logístico.
+	\end{enumerate}
+	
+	Este pipeline se ejecuta de forma periódica, permitiendo la incorporación incremental de nuevos datos sin necesidad de reprocesar el histórico completo, lo que optimiza el uso de recursos computacionales del clúster. 
+	
+	\subsection{Ventajas y justificación del enfoque adoptado}
+	
+	\begin{itemize}
+		\item \textbf{Eficiencia computacional:} El procesamiento distribuido mediante Spark permite paralelizar tareas de transformación y agregación en grandes volúmenes de datos, aprovechando la administración de recursos de \textbf{YARN}.
+		
+		\item \textbf{Escalabilidad:} La utilización de HDFS como sistema de almacenamiento distribuido posibilita escalar tanto la capacidad como el rendimiento del sistema de forma horizontal.
+		
+		\item \textbf{Actualización periódica:} El modelo incremental evita reprocesar todo el histórico ante cada ingreso de datos, limitando los cálculos únicamente a los nuevos registros detectados en cada ciclo.
+		
+		\item \textbf{Mantenimiento simplificado:} Separar claramente las etapas de ingesta, procesamiento, persistencia y visualización permite desacoplar responsabilidades y reducir la complejidad del sistema.
+		
+		\item \textbf{Integración nativa:} El ecosistema Hadoop-Spark-Hive está específicamente diseñado para este tipo de cargas batch, garantizando estabilidad y compatibilidad entre componentes.
+	\end{itemize}
+	
+	Aunque el dominio operativo requiere respuestas frecuentes, el análisis estadístico muestra que:
+	
+	\begin{itemize}
+		\item Las ventas presentan fuerte autocorrelación diaria y semanal.
+		\item La señal de demanda relevante se consolida en ventanas temporales superiores a los pocos minutos.
+		\item Las decisiones de reposición se toman a escala horaria o diaria, no en tiempo real estricto.
+	\end{itemize}
+	
+	Un enfoque puramente streaming introduciría una complejidad técnica elevada sin beneficios proporcionales para la toma de decisiones. El modelo batch incremental permite agrupar micro–eventos en lotes pequeños manteniendo precisión estadística y simplificando la gestión del sistema.
+	
+	El enfoque híbrido adoptado simula carácter continuo mediante micro–batches, logrando un equilibrio óptimo entre latencia operativa y robustez del procesamiento distribuido.
+	
+	\subsection{Relación entre arquitectura técnica y problema de negocio}
+	
+	La arquitectura propuesta responde directamente a las necesidades del problema de optimización de inventarios y reducción de costes logísticos mediante predicción de la demanda.
+	
+	El almacenamiento distribuido en \textbf{HDFS} permite consolidar grandes volúmenes de información histórica (ventas, promociones, precios), que constituyen la base analítica del sistema. Sobre estos datos, \textbf{Spark} ejecuta procesos batch distribuidos para generar previsiones de demanda por producto y tienda, permitiendo escalar el cálculo conforme aumenta el volumen de registros.
+	
+	Los resultados se estructuran mediante \textbf{Hive}, proporcionando una capa SQL para la generación de métricas clave de rendimiento (precisión del forecast, error absoluto medio, desviaciones porcentuales). Finalmente, \textbf{Streamlit} traslada dichos indicadores a una interfaz visual interactiva, diseñada como sistema de apoyo a la toma de decisiones operativas en planificación de stock y logística.
+	
+	Así, cada componente técnico cumple una función específica dentro de una cadena de valor orientada a maximizar la eficiencia operativa: desde la ingesta de datos, pasando por el cálculo distribuido del forecast, hasta su explotación visual por parte de los responsables logísticos.
+	
+	\subsection{Diagrama del sistema y descripción de componentes}
+	
+	El presente diagrama refleja el flujo de trabajo del clúster:
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{Diagrama.png}
+		\caption{Arquitectura general del sistema distribuido para optimización de inventarios, predicción de demanda y cálculo de métricas logísticas.}
+	\end{figure}
+	
+	\subsubsection*{Descripción de componentes}
+	
+	\begin{itemize}
+		
+		\item \textbf{Hadoop Distributed File System (HDFS):}
+		Sistema de almacenamiento distribuido que proporciona alta disponibilidad y tolerancia a fallos para los datasets de entrada e históricos procesados.
+		
+		\item \textbf{YARN:}
+		Plataforma gestora de recursos del clúster, responsable de la asignación de contenedores de cómputo y ejecución de trabajos distribuidos, garantizando una utilización equilibrada del hardware disponible.
+		
+		\item \textbf{Hive:}
+		Capa intermedia que permite realizar consultas SQL-like sobre los datos procesados en Spark y organizar la información en esquemas estructurados.
+		
+		\item \textbf{Data Producer:}
+		Componente encargado de generar lotes periódicos de datos sintéticos a partir de un dataset base. Introduce variaciones controladas en ventas, precios, promociones y factores externos, simulando el comportamiento dinámico de un entorno comercial real. Los archivos generados son almacenados directamente en el sistema distribuido \textbf{HDFS}, funcionando como fuente de datos continua para el pipeline.
+		
+		\item \textbf{Data Consumer (Spark):}
+		Nodo de procesamiento que recupera los datasets almacenados en HDFS y ejecuta operaciones de limpieza, normalización, validación y agregación utilizando \textbf{Apache Spark}. Los resultados son gestionados mediante \textbf{Hive} para su posterior persistencia estructurada.
+		
+		\item \textbf{Streamlit:}
+		Interfaz gráfica interactiva que consulta los datos almacenados en Parquet para generar dashboards dinámicos. Permite al usuario explorar indicadores de demanda, realizar comparaciones entre valores reales y predicciones, monitorear métricas logísticas y activar actualizaciones periódicas de información mediante mecanismos de recarga controlada. El sistema de alertas por stock bajo se evalúa tras cada micro–batch, permitiendo detectar umbrales críticos de inventario con latencias del orden de minutos, suficientemente reducidas para la toma de decisiones operativas en retail.
+		
+		
+	\end{itemize}
+	
+	\paragraph{Flujo de comunicación:}
+	
+	Los distintos componentes del sistema se interconectan sobre una red virtual \textit{Docker bridge} dedicada (\texttt{hadoop\_net}, subred 172.20.0.0/16), utilizando direccionamiento IP estático y protocolos específicos para cada rol funcional:
+	
+	\begin{itemize}
+		\item El \textbf{Producer} (\texttt{172.20.0.18}) genera ficheros \textit{Parquet} y los transfiere al clúster \textbf{HDFS} mediante llamadas RPC al \textbf{NameNode} (\texttt{172.20.0.10:8020}), desde donde los bloques se distribuyen automáticamente hacia los \textbf{DataNodes} (\texttt{172.20.0.12--13}).
+		
+		\item El \textbf{Spark Consumer} (\texttt{172.20.0.19}) se conecta al \textbf{Spark Master} (\texttt{172.20.0.15:7077}) para la asignación de ejecutores en los nodos \textbf{Spark Workers} (\texttt{172.20.0.16--17}). El acceso a los datos se realiza directamente en HDFS mediante la \textit{Hadoop FileSystem API} integrada con PySpark.
+		
+		\item Los resultados del procesamiento se almacenan en tablas \textbf{Hive}, registradas en el catálogo gestionado por el \textbf{Hive Metastore} a través del servicio Thrift (\texttt{172.20.0.20:9083}).
+		
+		\item La aplicación \textbf{Streamlit} (\texttt{172.20.0.21}) consulta tanto datos históricos en Hive como ficheros Parquet recientes en HDFS empleando conectores SQL y clientes directos Hadoop RPC.
+		
+		\item Los servicios administrativos y de supervisión se exponen mediante interfaces web:
+		\begin{itemize}
+			\item Web UI HDFS NameNode — \texttt{9870}
+			\item Web UI YARN ResourceManager — \texttt{8088}
+			\item Web UI Spark Master — \texttt{8080}
+			\item Dashboard Streamlit — \texttt{8501}
+		\end{itemize}
+	\end{itemize}
+	
+	Todo el tráfico inter–servicio permanece confinado dentro de la red privada virtual Docker, sin exposición directa al exterior, garantizando aislamiento de red, comunicación de baja latencia entre contenedores y control total de puertos abiertos únicamente para monitorización y acceso al dashboard web.
+	
+	
 	\section{Dataset seleccionado}
 	El dataset seleccionado ha sido extraído del sitio \textit{Kaggle} y muestra gran similitud con el dataset original propuesto en la orientación de este proyecto.
 	
 	\begin{itemize}
 		\item \textbf{Nombre:} Retail Store Inventory Forecasting Dataset.
 		\item \textbf{Fuente:} \href{https://www.kaggle.com/datasets/anirudhchauhan/retail-store-inventory-forecasting-dataset}{KAGGLE}
-		\item \textbf{Formato:} CSV original + ficheros generados y almacenados en HDFS (recomendado transformar a Parquet para procesamiento analítico).
+		\item \textbf{Formato:} CSV original + ficheros generados y almacenados en HDFS.
 	\end{itemize}
 	
+
+	\subsection{Volumen del dataset}
+	El CSV base contiene \textbf{73\,100 entradas}, lo cual lo hace adecuado como semilla para generar volúmenes mayores mediante el componente \texttt{data-producer}. Este nodo simula nuevas observaciones aplicando diversas variaciones estadísticas.
 	
-	% -------------------------
-	% Volumen
-	% -------------------------
-	\section{Volumen}
-	El CSV base contiene \textbf{73\,100 entradas}, lo cual lo hace adecuado como semilla para generar volúmenes mayores mediante el componente \texttt{data-producer}. Este nodo simula nuevas observaciones aplicando pequeñas variaciones estadísticas, permitiendo generar conjuntos de prueba de diferentes tamaños:
-	
-	\begin{itemize}
-		\item \textbf{Pequeño:} 100k--1M registros, útil para pruebas funcionales y desarrollo.
-		\item \textbf{Medio:} 1--10M registros para validación de rendimiento y escalado.
-		\item \textbf{Grande:} 10--100M+ registros para simular cargas Big Data y probar comportamiento de YARN/Spark/HDFS bajo estrés.
-	\end{itemize}
-	
-	% -------------------------
-	% Muestra del esquema
-	% -------------------------
-	\section{Muestra del esquema (columnas)}
 	El esquema del dataset base contiene los siguientes campos:
 	
 	\begin{table}[h!]
@@ -152,79 +243,348 @@
 		\end{tabular}
 	\end{table}
 	
-	% -------------------------
-	% Características
-	% -------------------------
-	\section{Características}
 	\begin{itemize}
 		\item \textbf{Atributos numéricos:} Inventory Level, Units Sold, Units Ordered, Price, Discount, Competitor Pricing, Demand Forecast.
 		\item \textbf{Atributos categóricos:} Store ID, Product ID, Category, Region, Weather Condition, Seasonality, Holiday/Promotion.
-		\item \textbf{Temporalidad:} Series diarias (con posibilidad de aumentar resolución a horaria si se requiere).
-		\item \textbf{Etiquetas / target:} La variable objetivo para forecasting es \texttt{Units Sold} en distintos horizontes (T+1, T+7, etc.).
+		\item \textbf{Temporalidad:} Series diarias.
+		\item \textbf{Etiquetas / target:} La variable objetivo para forecasting es \texttt{Units Sold} en distintos horizontes.
 		\item \textbf{Ruido:} Variaciones causadas por clima, promociones, cambios en precios de competencia; el \texttt{data-producer} puede introducir ruido controlado.
-		\item \textbf{Distribuciones:} Se generan perturbaciones normales centradas en valores base, ajustables por categoría/estación.
+		
 	\end{itemize}
 	
-	% -------------------------
-	% Pertinencia
-	% -------------------------
-	\section{Pertinencia con el objetivo}
+	\subsection{Pertinencia con el objetivo}
 	El dataset reúne las variables necesarias para construir predicciones de demanda y calcular métricas de inventario. Con los campos de precio, descuento, promoción y condiciones meteorológicas, se pueden generar predicciones y cálculos estadísticos. Además, la estructura temporal y la granularidad por tienda/producto permiten diseñar políticas de reposición, evaluar impactos regionales y calcular indicadores logísticos como días de inventario, tasa de rotación o alertas de stock.
 	
-	% -------------------------
-	% Arquitectura propuesta
-	% -------------------------
-	\section{Arquitectura propuesta: \textbf{Batch}}
-	A continuación se argumenta la elección de una arquitectura \textbf{batch} para este proyecto, con sus ventajas y su integración con tecnologías de Big Data.
 	
-	\subsection{Descripción general}
-	El pipeline propuesto se compone de:
-	\begin{enumerate}
-		\item Ingesta de datos desde CSV hacia HDFS.
-		\item Limpieza y transformación con Spark.
-		\item Registro y consulta mediante Hive.
-		\item Almacenamiento de resultados en Postgres.
-		\item Visualización mediante Streamlit.
-	\end{enumerate}
+	\section{Funcionamiento del generador de datos}
 	
-	\subsection{Ventajas del enfoque batch}
-	\begin{itemize}
-		\item \textbf{Eficiencia computacional:} los jobs pueden agrupar datos y procesarlos masivamente aprovechando los recursos de YARN.
-		\item \textbf{Reproducibilidad:} las ejecuciones son determinísticas y trazables, ideales para validaciones y auditorías.
-		\item \textbf{Simplicidad de mantenimiento:} los flujos ETL complejos se implementan de forma más limpia que en un sistema streaming.
-		\item \textbf{Integración nativa:} HDFS, Hive y Spark están optimizados para este paradigma.
-	\end{itemize}
+	Con el objetivo de simular un flujo continuo de información equivalente al comportamiento de un sistema logístico real, se implementó un \textit{data-producer} basado en la técnica de \textbf{reproducción estocástica de datos históricos}. El sistema toma como referencia el dataset real, desde el cual se seleccionan observaciones de forma aleatoria mediante muestreo con reemplazo (\textit{bootstrap sampling}). Este mecanismo permite preservar la relación estadística original entre variables como ventas, inventario, precios, promociones y estacionalidad.
 	
-	\newpage
-	% -------------------------
-	% Diagrama del sistema
-	% -------------------------
-	\section{Diagrama del sistema y descripción de componentes}
+	Cada iteración del productor selecciona un subconjunto de registros del dataset y aplica a cada fila un conjunto de \textbf{perturbaciones controladas} que simulan la variabilidad natural del mercado, la demanda y la logística diaria. Este procedimiento garantiza que los datos generados mantengan la coherencia estructural del conjunto original, preserven las correlaciones reales entre variables e introduzcan fluctuaciones realistas propias de un entorno dinámico.
+	
 	\begin{figure}[h!]
 		\centering
-		\includegraphics[width=\textwidth]{Diagrama.png}
-		\caption{Arquitectura general del sistema distribuido para optimización de inventarios y logística.}
+		\includegraphics[width=\textwidth]{producer_log.png}
+		\caption{Ejecución del Data Producer tras 10 minutos generando lotes sucesivos de observaciones sintéticas, demostrando el flujo continuo de ingestión de datos hacia HDFS.}
 	\end{figure}
 	
-	\subsection*{Descripción de componentes}
+	Desde el punto de vista estadístico, el productor emplea un modelo de \textbf{ruido multiplicativo gaussiano}, donde cada valor base se corrige mediante factores aleatorios centrados en la unidad:
+	
+	\[
+	X_t = X_{base} \cdot N(\mu=1,\sigma^2)
+	\]
+	
+	De esta forma, el valor original nunca es sustituido completamente, sino ligeramente escalado por un término aleatorio que introduce pequeñas desviaciones porcentuales. La media igual a uno garantiza la estabilidad de los valores esperados, mientras que la varianza controla el nivel de volatilidad aplicado a cada variable.
+	
+	Las principales distribuciones utilizadas en el diseño del productor son:
+	
 	\begin{itemize}
-		\item \textbf{Data Producer:} Componente encargado de replicar y variar los datos originales del dataset base, aplicando pequeñas perturbaciones controladas (p. ej., fluctuaciones de ventas o clima). Escribe los resultados generados en el sistema distribuido \textbf{HDFS}, actuando como fuente continua de datos para las fases posteriores.
+		\item \textbf{Distribución Normal} para modelar fluctuaciones continuas de ventas, inventario, previsiones de demanda y precios.
+		\item \textbf{Distribución Bernoulli} para la activación de promociones o eventos binarios.
+		\item \textbf{Escalado determinista estacional} basado en factores fijos asociados a la época del año.
+	\end{itemize}
+	
+	La elección de estas distribuciones responde a la necesidad de imitar variaciones suaves y simétricas alrededor de valores reales, características habituales en sistemas de consumo y logística, evitando la introducción de picos o discontinuidades artificiales propias de otras distribuciones no realistas para este dominio.
+	
+	\subsection{Introducción de perturbaciones en el Data Producer}
+	
+	El mecanismo de perturbación implementado en el generador de datos se basa en la aplicación de \textbf{ruido gaussiano multiplicativo} sobre las columnas numéricas del dataset real. Para cada observación seleccionada, se generan factores correctores independientes obtenidos a partir de distribuciones normales con media unitaria:
+	
+	\[
+	f_i \sim N(1, \sigma_i^2)
+	\]
+	
+	Posteriormente, el valor original de cada variable se transforma según:
+	
+	\[
+	X^\ast_i = X_i \cdot f_i
+	\]
+	
+	donde:
+	
+	\begin{itemize}
+		\item $X_i$ representa el valor histórico original del dataset.
+		\item $f_i$ es el factor de perturbación gaussiano.
+		\item $X^\ast_i$ es el valor final emitido por el producer.
+	\end{itemize}
+	
+	Esta técnica introduce desviaciones relativas (porcentuales) en lugar de desplazamientos absolutos, garantizando que los datos mantengan su escala realista. Las desviaciones típicas aplicadas son:
+	
+	\begin{itemize}
+		\item Ventas (\textit{Units Sold}): $\sigma = 0.12$ (variación $\pm 12\%$).
+		\item Inventario (\textit{Inventory Level}): $\sigma = 0.15$.
+		\item Predicción de demanda (\textit{Demand Forecast}): $\sigma = 0.10$, combinada con un ligero sesgo positivo para simular errores de previsión.
+		\item Precios (\textit{Price}): $\sigma = 0.05$.
+		\item Precios de la competencia (\textit{Competitor Pricing}): $\sigma = 0.08$, calculados además de forma correlacionada respecto al precio propio del producto.
+	\end{itemize}
+	
+	Adicionalmente, se introduce un \textbf{escalado temporal estacional} mediante factores multiplicativos determinados por la categoría \textit{Seasonality}:
+	
+	\[
+	X^\ast = X \cdot F_{season}
+	\]
+	
+	donde $F_{season}$ adopta valores mayores o menores que la unidad según la estación del año (por ejemplo, incremento en verano y reducción en invierno).
+	
+	En períodos marcados por promociones u ofertas especiales, modelados mediante variables binarias, se aplica un factor adicional de amplificación de la demanda:
+	
+	\[
+	X^\ast = X \cdot F_{promo}
+	\]
+	
+	Finalmente, el sistema implementa una lógica de reabastecimiento logística basada en reglas condicionales sobre los niveles de inventario, dando lugar a la generación estocástica de volúmenes de reposición, lo que permite simular episodios de rotura de stock y respuesta logística ante picos de demanda.
 		
-		\item \textbf{Data Consumer:} Nodo que lee los datos desde HDFS, los interpreta y limpia, eliminando inconsistencias o valores atípicos. Realiza operaciones de agregación y normalización, guardando los resultados en la base de datos de PostgreSQL a través de HIVE. Su procesamiento está basado en \textbf{Spark}.
+	\section{Detalles del procesamiento del Spark Consumer}
+	
+	El sistema de procesamiento de datos se implementa mediante un \textbf{job de Spark continuo en modo batch incremental}, ejecutado de forma persistente a través de un proceso \textit{spark-submit} que permanece activo durante todo el ciclo de vida del sistema. El consumidor utiliza un enfoque de \textbf{micro–batching} basado en la monitorización periódica del sistema de archivos distribuido (HDFS).
+	
+	En cada iteración del bucle de ejecución:
+	
+	\begin{enumerate}
+		\item Se inspecciona la ruta de entrada en HDFS (\texttt{/data/input/}) utilizando directamente la API de Hadoop \textit{FileSystem} a través del puente Py4J.
+		\item Se detectan únicamente los archivos Parquet nuevos generados por el productor, evitando carpetas temporales y archivos incompletos.
+		\item Los archivos se agrupan en bloques de hasta 20 unidades por lote para evitar una carga excesiva de memoria.
+		\item Cada lote se procesa como una operación de lectura independiente dentro de Spark.
+	\end{enumerate}
+	
+	Este diseño permite simular un proceso de consumo continuo sin depender de herramientas externas de streaming, manteniendo compatibilidad con una arquitectura basada en HDFS.
+	
+	\subsection{Resumen funcional del Spark Consumer}
+	
+	El consumidor desarrollado implementa un patrón de Micro-batch ingestion job persistente cuyas responsabilidades son:
+	
+	\begin{itemize}
+		\item Detección proactiva de nuevos archivos Parquet.
+		\item Lectura batch optimizada.
+		\item Normalización ligera del esquema.
+		\item Inserción incremental en Hive.
+		\item Gestión segura de archivos consumidos.
+		\item Reintento automático ante fallos.
+	\end{itemize}
+	
+	Este diseño constituye una solución eficiente, escalable y robusta para el procesamiento continuo de datos dentro de una arquitectura distribuida basada íntegramente en componentes del ecosistema Hadoop-Spark.
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{consumer_log.png}
+		\caption{Ejecución persistente del Spark Consumer procesando micro-lotes Parquet desde HDFS e insertando resultados incrementales en Hive.}
+	\end{figure}
+	
+	\subsection{Tipo de Job Spark utilizado}
+	
+	El consumidor emplea un modelo de \textbf{job Spark batch clásico ejecutado de forma persistente} que auto–genera micro–lotes de procesamiento. Técnicamente es una sucesión de ejecuciones batch secuenciales desencadenadas por la disponibilidad de nuevos archivos en HDFS:
+
+	Cada micro–batch corresponde a:
+	
+	\begin{itemize}
+		\item Una lectura estática de varios archivos Parquet en un único \texttt{DataFrame}.
+		\item Una transformación mínima de los datos.
+		\item Una inserción directa sobre una tabla Hive en modo \texttt{append}.
+	\end{itemize}
+	
+	Este patrón se ajusta al paradigma conocido como \textbf{File-based Micro-Batch Processing}.
+	
+	\subsection{Operaciones de transformación}
+	
+	La fase de transformación es deliberadamente ligera, ya que el objetivo principal es preservar los datos generados por el productor sin alteración semántica.
+	
+	Las transformaciones aplicadas consisten en:
+	
+	\begin{itemize}
+		\item \textbf{Normalización de nombres de columnas:}
 		
-		\item \textbf{Streamlit:} Interfaz visual que se conecta a la base de datos para mostrar resultados, métricas y predicciones. Ofrece paneles de control con gráficos dinámicos, indicadores de stock y alertas de reposición, permitiendo al usuario interactuar en tiempo real con los datos.
+		Esta operación asegura compatibilidad con las convenciones de Spark SQL y evita errores derivados de identificadores con mayúsculas.
 		
-		\item \textbf{Hadoop File System:} Conjunto de nodos de almacenamiento y un nodo maestro, que representan la infraestructura del sistema de archivos de Hadoop.
+		\item \textbf{Unificación de tipos:}
+		Los esquemas se unifican implícitamente durante la lectura mediante:
+		\begin{verbatim}
+			spark.read.option("mergeSchema","true")
+		\end{verbatim}
 		
-		\item \textbf{YARN:} Conjunto de contenedores con software encargado de distribuir los recursos del sistema para realizar procesos.
+		permitiendo acomodar pequeños cambios de tipo entre archivos generados en distintos momentos.
 		
-		\item \textbf{Spark:} Componente que realiza los trabajos distribuidos. El consumer se ejecuta sobre este componente.
+		\item \textbf{Validación de volumen:}
+		Se obtiene el número total de registros procesados mediante:
 		
-		\item \textbf{HIVE:} Componente intermediaria entre el output del consumer y la base de datos. Realiza consultas y almacena datos sobre la base de datos de PostgreSQL
+		\[
+		count = df.count()
+		\]
 		
-		\item \textbf{PostgreSQL:} Base de datos del sistema. Streamlit carga los datos a través de ella.
-		
+		para verificar la consistencia de cada lote.
 		
 	\end{itemize}
+	
+	El job no realiza agregaciones, joins, filtrados complejos ni cálculos adicionales, dado que tales operaciones corresponden a las fases analíticas posteriores (consultas SQL y dashboards), no al pipeline de ingestión.
+	
+	\subsection{Operaciones de carga en Hive}
+	
+	El almacenamiento definitivo de los datos se realiza mediante un proceso de inserción incremental sobre una tabla Hive externa previamente definida:
+	
+	\[
+	retail\_sales\_raw
+	\]
+	
+	La tabla se declara explícitamente con un esquema tipado:
+	
+	\begin{itemize}
+		\item Dimensiones categóricas: date, store\_id, product\_id, category, region, weather\_condition, seasonality
+		\item Métricas numéricas:
+		\begin{itemize}
+			\item inventory\_level (\texttt{BIGINT})
+			\item units\_sold (\texttt{BIGINT})
+			\item units\_ordered (\texttt{BIGINT})
+			\item demand\_forecast (\texttt{DOUBLE})
+			\item price (\texttt{DOUBLE})
+			\item discount (\texttt{DOUBLE})
+			\item competitor\_pricing (\texttt{DOUBLE})
+			\item holiday\_promotion (\texttt{BIGINT})
+		\end{itemize}
+	\end{itemize}
+	
+	La escritura se produce en modo de anexado:
+	
+	\begin{verbatim}
+		df.write.mode("append").insertInto("retail_sales_raw")
+	\end{verbatim}
+	
+	Este método garantiza persistencia incremental sin sobrescritura de datos previos, escalabilidad al aumentar el volumen de registros e integración directa con consultas SQL posteriores.
+	
+	\subsection{Gestión de archivos procesados}
+	
+	Tras la correcta inserción del lote en Hive:
+	
+	\begin{itemize}
+		\item Se crea dinámicamente un directorio de archivado:
+		\[
+		/data/processed/batch\_t
+		\]
+		donde $t$ es una marca temporal.
+		\item Los ficheros Parquet utilizados se mueven desde la ruta de entrada hacia el directorio de almacenamiento.
+		\item Si ocurre cualquier fallo durante la lectura o escritura, los archivos no se mueven, garantizando la posibilidad de \textbf{reintento automático}.
+	\end{itemize}
+	
+	Este mecanismo implementa un sistema de \textbf{confirmación implícita de consumo} similar al concepto de \textit{acknowledgment}, evitando duplicidades o pérdida de información.
+	
+	\subsection{Esquema de tolerancia a fallos}
+	
+	El consumidor incorpora una estrategia básica de tolerancia a fallos:
+	
+	\begin{itemize}
+		\item Si no existen archivos para consumir, el proceso entra en estado de espera pasiva.
+		\item Si ocurre una excepción durante la ingesta, la iteración registra el error y conserva intactos los ficheros.
+		\item El siguiente ciclo vuelve a intentar el procesamiento del mismo lote.
+	\end{itemize}
+	
+	Este enfoque garantiza propiedades de:
+	
+	\begin{itemize}
+		\item \textbf{Al menos una vez} (At-Least-Once Delivery).
+		\item Recuperación automática sin intervención manual.
+	\end{itemize}
+	
+	\textbf{}
+	
+	
+	
+	
+	
+	
+	\section{Visualización de resultados}
+	
+	La capa de visualización del sistema tiene como objetivo principal transformar el procesamiento distribuido en \textbf{conocimiento operativo útil para la toma de decisiones logísticas}. La aplicación desarrollada con \textbf{Streamlit} permite consultar de forma interactiva tanto los volúmenes procesados como el desempeño de los modelos de predicción y los indicadores de estado de inventario.
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{streamlit.png}
+		\caption{Interfaz Streamlit mostrando la cantidad de datos procesados tras 10 minutos de ejecución.}
+	\end{figure}
+	
+	La Figura anterior evidencia el crecimiento sostenido del volumen de datos tratado por el sistema como resultado de la ingestión continua y el procesamiento incremental en Spark. Este comportamiento confirma la capacidad del pipeline para absorber flujos constantes de información sin degradación significativa de la respuesta visual.
+	
+	\newpage
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{forecast.png}
+		\caption{Interfaz Streamlit mostrando la comparación histórica entre demanda real y pronósticos tras más de 10 minutos de ingestión continua, evidenciando el crecimiento del volumen de datos analizados y las métricas agregadas del sistema.}
+	\end{figure}
+	
+	En la Figura se visualiza la comparación temporal entre los valores reales de venta y los pronósticos de demanda producidos por el motor de forecasting del sistema. La proximidad entre ambas curvas demuestra un elevado nivel de precisión global, validado adicionalmente por las métricas calculadas en el dashboard (precisión promedio superior al 95\% y error porcentual inferior al 2\%). Esta visualización verifica la correcta integración de la lógica analítica y resume el comportamiento agregado de la predicción diaria.
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{logistic.png}
+		\caption{Interfaz Streamlit mostrando los costos logísticos para mantener el stock de productos tras 10 minutos de ejecución. Se muestra una comparación entre regiones, aunque esto es modificable por filtros en la aplicación.}
+	\end{figure}
+	
+	El análisis de costos logísticos refleja el impacto operativo directo del forecast sobre las decisiones de reposición. Los resultados se muestran agrupados por regiones, permitiendo identificar zonas de mayor inversión en stock y potenciales ineficiencias en la distribución. Estos datos pueden filtrarse dinámicamente por tienda, categoría de producto o período temporal, lo que facilita simulaciones operativas y comparaciones estratégicas entre escenarios.
+	
+	\newpage
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{alert.png}
+		\caption{Interfaz Streamlit mostrando los productos que sobrepasaron el umbral definido por el usuario y que se consideran escasos en el stock. Abajo se muestra el mapa de rutas logísticas, que informa de la actividad en diversas regiones. Solo se muestran las 4 regiones comprendidas en el dataset original.}
+	\end{figure}
+	
+	La visualización final integra un sistema de alertas de reposición temprana, generado mediante reglas operativas aplicadas sobre los niveles de inventario agregados. Los productos que descienden por debajo del umbral configurado por el usuario son marcados como críticos, activando recomendaciones de intervención logística. Complementariamente, se presenta un mapa de rutas regionales que exhibe la distribución espacial de la actividad logística simulada.
+	
+	En conjunto, la capa visual confirma no solo el correcto funcionamiento del pipeline completo, sino también la efectividad del sistema en la traducción de grandes volúmenes de datos en indicadores interpretables que asisten directamente a la planificación de inventarios, la detección temprana de roturas de stock y la estimación de costes operativos.
+	
+	
+	\section{Monitoreo y métricas del clúster}
+	
+	Esta sección documenta el comportamiento de la infraestructura distribuida durante la ejecución real del sistema y permite evaluar el desempeño del procesamiento masivo de datos sobre el clúster Hadoop--Spark desplegado mediante contenedores Docker.
+	
+	El monitoreo se apoya en las interfaces web nativas de \textbf{HDFS}, \textbf{YARN} y \textbf{Spark}, las cuales proporcionan información en tiempo real sobre consumo de recursos, balance de carga y tiempos de ejecución de las aplicaciones distribuidas.
+	
+	
+	\subsection{Estado del HDFS}
+	
+	La interfaz de HDFS confirma la correcta operación del sistema de archivos distribuido. Durante la ejecución, los datos generados por el productor son particionados automáticamente en bloques distribuidos de forma homogénea entre los dos DataNodes activos del clúster. La visualización del uso de disco evidencia un reparto equilibrado de la carga de almacenamiento, validando la tolerancia a fallos y el balanceo automático implementados por HDFS.
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{hadoop_dashboard.png}
+		\caption{Interfaz de administración de HDFS mostrando DataNodes activos, capacidad utilizada y volumen acumulado de datos ingresados durante la ejecución del sistema durante 10 minutos. En la imagen se puede apreciar la homogeneidad del espacio dedicado y el balance adecuado de los archivos almacenados según el espacio usado.}
+	\end{figure}
+	
+	El incremento progresivo del volumen almacenado demuestra la capacidad del clúster para sostener flujos continuos de ingestión sin saturación de espacio ni degradación del rendimiento, confirmando el cumplimiento del requisito de procesamiento de grandes volúmenes de datos.
+	
+	
+	\subsection{Ejecución Spark y consumo de recursos}
+	
+	El panel de Spark permite evaluar directamente el comportamiento de los procesos distribuidos. Las ejecuciones observadas corresponden, en primer lugar, a tareas de inicialización del esquema Hive y creación de tablas, seguidas del job persistente de consumo de datos en modo batch incremental.
+	
+	\begin{figure}[h!]
+		\centering
+		\includegraphics[width=\textwidth]{spark_dashboard.png}
+		\caption{Panel de control del clúster Spark mostrando ejecución de aplicaciones, asignación de ejecutores y consumo de recursos del sistema tras 10 minutos de ejecución. Las dos tareas completadas forman parte de la inicialización del esquema y creación de las tablas. La tarea activa representa el procesamiento de datos entrantes por el consumer. Ambos nodos workers trabajan al unísono consumiendo toda la capacidad de procesamiento dedicado y la memoria RAM necesaria.}
+	\end{figure}
+	
+	Durante la fase de procesamiento activo, ambos nodos worker se encuentran operando simultáneamente, compartiendo la carga de transformación de los micro-lotes entrantes. El uso estable de memoria RAM y la ausencia de picos de ejecución o fallos de tareas indican una asignación adecuada de recursos, sin evidencia de saturación ni desbordamiento de memoria en los ejecutores.
+	
+	
+	\subsection{Análisis de tiempos de procesamiento}
+	
+	Las ejecuciones observadas en el panel de Spark reflejan tiempos de procesamiento estables y lineales respecto al volumen de archivos Parquet entrantes. El comportamiento del job se caracteriza por ciclos regulares de lectura, transformación ligera e inserción en Hive, manteniendo una latencia prácticamente constante mientras el volumen crece.
+	
+	Este patrón demuestra la eficiencia del enfoque de micro--batching basado en archivos y confirma la escalabilidad práctica del pipeline sin introducir cuellos de botella en I/O o en CPU.
+	
+	
+	\subsection{Identificación de cuellos de botella}
+	
+	Durante la ejecución monitorizada no se detectaron saturaciones significativas en la infraestructura. Se observó:
+	
+	\begin{itemize}
+		\item Uso uniforme de CPU en los workers Spark, sin acumulación de tareas pendientes.
+		\item Consumo de memoria RAM estable dentro de los límites configurados de los ejecutores.
+		\item Escrituras HDFS sin congestión observable en disco ni fragmentación de bloques.
+		\item Tráfico de red interno normal dentro del bridge Docker, sin latencias apreciables.
+	\end{itemize}
+	
+	La ausencia de errores por desbordamiento de memoria (\textit{out of memory}), cancelación de tareas o reintentos excesivos confirma que el dimensionamiento del clúster es adecuado para la carga simulada, garantizando estabilidad operativa y correcta asignación de recursos.
+	
+	En conclusión, las métricas del clúster validan que la infraestructura desplegada soporta exitosamente el procesamiento continuo del flujo de datos, evidenciando paralelismo efectivo, balanceo de carga en almacenamiento distribuido y desempeño estable de los jobs en Spark. Estos resultados confirman que el sistema cumple plenamente con los requisitos de procesamiento masivo y análisis de rendimiento establecidos para el proyecto.
 	
 \end{document}
